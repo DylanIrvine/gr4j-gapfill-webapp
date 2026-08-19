@@ -322,6 +322,9 @@ if uploaded_file is not None:
             [lim_lo, lim_hi],
             'k--'
         )
+
+        ax.set_xlim(lim_lo, lim_hi)
+        ax.set_ylim(lim_lo, lim_hi)       
         
         ax.set_xlabel(
             'Observed (mm/d)'
