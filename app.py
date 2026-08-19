@@ -169,6 +169,37 @@ if uploaded_file is not None:
         st.write(
             f'Record ends: {dates.max()}'
         )
+
+        st.subheader('GR4J Parameters')
+
+        x1 = st.number_input(
+            'X1 Production Store Capacity (mm)',
+            min_value=1.0,
+            max_value=3000.0,
+            value=500.0
+        )
+        
+        x2 = st.number_input(
+            'X2 Groundwater Exchange (mm/d)',
+            min_value=-20.0,
+            max_value=5.0,
+            value=0.0
+        )
+        
+        x3 = st.number_input(
+            'X3 Routing Store Capacity (mm)',
+            min_value=1.0,
+            max_value=1000.0,
+            value=100.0
+        )
+        
+        x4 = st.number_input(
+            'X4 Time Base (days)',
+            min_value=0.5,
+            max_value=20.0,
+            value=2.0
+        )
+
     
     except Exception as e:
 
