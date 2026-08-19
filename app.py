@@ -536,7 +536,7 @@ if uploaded_file is not None:
             )
             
             fig_cal_scatter = plt.figure(figsize=(8/2.54, 8/2.54))
-            ax = fig_cal_scatter.add_axes[0.10, 0.18, 0.85 ( 0.72])
+            ax = fig_cal_scatter.add_axes[0.10, 0.18, 0.85, 0.72])
             
             ax.scatter(
                 q_obs_mmd[mask],
