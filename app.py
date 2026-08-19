@@ -232,6 +232,10 @@ if uploaded_file is not None:
             q_obs_mmd
             - q_sim_uploaded
         )
+
+        rel_residuals = (
+            residuals/ q_obs_mmd      
+        )
         
         fig_res = plt.figure(
             figsize=(17/2.54, 6/2.54)
@@ -243,7 +247,7 @@ if uploaded_file is not None:
         
         ax.plot(
             dates,
-            residuals,
+            rel_residuals,
             color='firebrick',
             linewidth=0.8
         )
@@ -255,7 +259,7 @@ if uploaded_file is not None:
         )
         
         ax.set_ylabel(
-            'Residual (Obs - Sim)'
+            'Relative Residual (Obs - Sim)/Obs'
         )
         
         ax.set_xlabel(
