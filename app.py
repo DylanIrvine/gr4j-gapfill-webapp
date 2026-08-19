@@ -1,5 +1,4 @@
 import streamlit as st
-import numpy as np
 import pandas as pd
 
 from core.gr4j import simulate
@@ -44,9 +43,6 @@ if uploaded_file is not None:
         columns
     )
 
-    # Everything below here should also
-    # be inside the same block
-
     st.subheader('Catchment Information')
 
     area_km2 = st.number_input(
@@ -65,16 +61,8 @@ if uploaded_file is not None:
         ]
     )
 
-    st.write(
-        f'Catchment Area: {area_km2:.1f} km²'
-    )
-
-    st.write(
-        f'Flow Units: {flow_units}'
-    )
-
     try:
-        # Hard coded to have day first for now, but this may need to be corrected later
+
         dates = pd.to_datetime(
             df[date_col],
             dayfirst=True
@@ -87,76 +75,20 @@ if uploaded_file is not None:
         flow = df[flow_col].to_numpy()
 
         if flow_units == 'm3/s':
-        
+
             q_obs_mmd = cumecs_to_mmd(
                 flow,
                 area_km2
             )
-        
+
         elif flow_units == 'mm/d':
-        
+
             q_obs_mmd = flow
-        
+
         else:
-        
+
             q_obs_mmd = flow / area_km2
 
-        st.subheader('GR4J Parameters')
-        
-        x1 = st.number_input(
-            'X1 Production Store Capacity (mm)',
-            min_value=1.0,
-            max_value=3000.0,
-            value=500.0
-        )
-        
-        x2 = st.number_input(
-            'X2 Groundwater Exchange (mm/d)',
-            min_value=-20.0,
-            max_value=5.0,
-            value=0.0
-        )
-        
-        x3 = st.number_input(
-            'X3 Routing Store Capacity (mm)',
-            min_value=1.0,
-            max_value=1000.0,
-            value=100.0
-        )
-        
-        x4 = st.number_input(
-            'X4 Time Base (days)',
-            min_value=0.5,
-            max_value=20.0,
-            value=2.0
-        )
-        
-        params = {
-            'X1': x1,
-            'X2': x2,
-            'X3': x3,
-            'X4': x4
-        }
-        
-        q_sim_uploaded = simulate(
-            rain,
-            pet,
-            params
-        )
-
-        st.subheader('Uploaded Data GR4J Test')
-
-        df_sim = pd.DataFrame({
-            'Date': dates,
-            'Observed_mm_d': q_obs_mmd,
-            'Simulated_mm_d': q_sim_uploaded
-        })
-
-        st.line_chart(
-            df_sim.set_index('Date')
-        )
-
-        
         st.subheader('Data Summary')
 
         st.write(
@@ -174,6 +106,7 @@ if uploaded_file is not None:
         st.write(
             f'PET Missing Values: {pd.isna(pet).sum()}'
         )
+
         st.write(
             f'Record starts: {dates.min()}'
         )
@@ -190,21 +123,21 @@ if uploaded_file is not None:
             max_value=3000.0,
             value=500.0
         )
-        
+
         x2 = st.number_input(
             'X2 Groundwater Exchange (mm/d)',
             min_value=-20.0,
             max_value=5.0,
             value=0.0
         )
-        
+
         x3 = st.number_input(
             'X3 Routing Store Capacity (mm)',
             min_value=1.0,
             max_value=1000.0,
             value=100.0
         )
-        
+
         x4 = st.number_input(
             'X4 Time Base (days)',
             min_value=0.5,
@@ -212,7 +145,33 @@ if uploaded_file is not None:
             value=2.0
         )
 
-    
+        params = {
+            'X1': x1,
+            'X2': x2,
+            'X3': x3,
+            'X4': x4
+        }
+
+        q_sim_uploaded = simulate(
+            rain,
+            pet,
+            params
+        )
+
+        df_sim = pd.DataFrame({
+            'Date': dates,
+            'Observed_mm_d': q_obs_mmd,
+            'Simulated_mm_d': q_sim_uploaded
+        })
+
+        st.subheader(
+            'Observed vs Simulated (mm/d)'
+        )
+
+        st.line_chart(
+            df_sim.set_index('Date')
+        )
+
     except Exception as e:
 
         st.error(str(e))
