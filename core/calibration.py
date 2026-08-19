@@ -204,9 +204,9 @@ def calibrate_gr4j(
 
     }
 
-return {
-    'best_params': best_params,
-    'best_score': best_score,
-    'behavioural_df': behavioural_df
-}
+    return {
+        'best_params': best_params,
+        'best_score': best_score,
+        'behavioural_df': behavioural_df
+    }
 
