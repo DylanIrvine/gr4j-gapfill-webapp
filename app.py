@@ -278,13 +278,7 @@ if uploaded_file is not None:
         
         st.pyplot(fig_res)
 
-        if np.isfinite(q_obs_mmd).sum() < 730:
-        
-            st.warning(
-                'Less than two years of observed flow available.'
-            )
-
-            fig_scatter = plt.figure(
+                    fig_scatter = plt.figure(
                 figsize=(8/2.54, 8/2.54)
             )
             
@@ -331,6 +325,11 @@ if uploaded_file is not None:
             
             st.pyplot(fig_scatter)
 
+        if np.isfinite(q_obs_mmd).sum() < 730:
+        
+            st.warning(
+                'Less than two years of observed flow available.'
+            )
         
         st.subheader('Calibration')
 
