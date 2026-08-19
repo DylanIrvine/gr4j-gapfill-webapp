@@ -578,7 +578,8 @@ if uploaded_file is not None:
                 q_obs_mmd[mask],
                 q_cal[mask],
                 s=5,
-                alpha=0.3
+                alpha=0.3,
+                color='#0DB14B'
             )
             
             lim_lo = min(
@@ -632,7 +633,7 @@ if uploaded_file is not None:
             ax = fig_fdc.add_axes([0.15, 0.15, 0.75, 0.75])
             
             ax.plot(ex_obs, q_obs_fdc, label='Observed')
-            ax.plot(ex_cal, q_cal_fdc, label='Calibrated')
+            ax.plot(ex_cal, q_cal_fdc, color = '#0DB14B', label='Calibrated')
             
             ax.set_yscale('log')
             
