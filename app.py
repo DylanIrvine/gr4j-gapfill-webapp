@@ -398,6 +398,30 @@ if uploaded_file is not None:
 
             st.json(best_params)
 
+            if best_params['X1'] <= 1.01:
+                st.warning('X1 reached lower bound')
+            
+            if best_params['X1'] >= 2999:
+                st.warning('X1 reached upper bound')
+            
+            if best_params['X2'] <= -19.99:
+                st.warning('X2 reached lower bound')
+            
+            if best_params['X2'] >= 4.99:
+                st.warning('X2 reached upper bound')
+            
+            if best_params['X3'] <= 1.01:
+                st.warning('X3 reached lower bound')
+            
+            if best_params['X3'] >= 999:
+                st.warning('X3 reached upper bound')
+            
+            if best_params['X4'] <= 0.51:
+                st.warning('X4 reached lower bound')
+            
+            if best_params['X4'] >= 19.9:
+                st.warning('X4 reached upper bound')            
+            
             q_cal = simulate(
                 rain,
                 pet,
