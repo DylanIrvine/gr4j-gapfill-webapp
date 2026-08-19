@@ -346,26 +346,25 @@ if uploaded_file is not None:
             value=730
         )
 
-        st.subheader('Calibration')
-        
-        objective = st.selectbox(
-            'Objective Function',
-            [
-                'KGE',
-                'NSE'
-            ]
-        )
-        
-        warmup_days = st.number_input(
-            'Warm-up Days',
-            value=730
-        )
-        
-        
+        with st.expander(
+            'Advanced Calibration Settings'
+        ):
+
+            maxiter = st.number_input(
+                'Maximum Iterations',
+                value=25,
+                min_value=1
+            )
+
+            popsize = st.number_input(
+                'Population Size',
+                value=12,
+                min_value=1
+            )
+
         run_calibration = st.button(
             'Calibrate GR4J'
         )
-
 
         if run_calibration:
 
