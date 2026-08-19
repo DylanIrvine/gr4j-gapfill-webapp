@@ -35,10 +35,6 @@ st.line_chart(
     df.set_index('Day')
 )
 
-
-
-st.title('GR4J Gap Filling Tool')
-
 uploaded_file = st.file_uploader(
     'Upload CSV',
     type=['csv']
