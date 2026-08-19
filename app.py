@@ -301,8 +301,16 @@ if uploaded_file is not None:
             s=5,
             alpha=0.3
         )
+
+          lim_lo = np.nanmin(
+            [
+                np.nanmin(q_obs_mmd),
+                np.nanmin(q_sim_uploaded)
+            ]
+        )      
+
         
-        lim = np.nanmax(
+        lim_hi = np.nanmax(
             [
                 np.nanmax(q_obs_mmd),
                 np.nanmax(q_sim_uploaded)
@@ -310,8 +318,8 @@ if uploaded_file is not None:
         )
         
         ax.plot(
-            [0, lim],
-            [0, lim],
+            [lim_lo, lim_hi],
+            [lim_lo, lim_hi],
             'k--'
         )
         
