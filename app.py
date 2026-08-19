@@ -9,6 +9,17 @@ from core.gr4j import simulate
 from core.units import cumecs_to_mmd
 from core.calibration import calibrate_gr4j
 
+#%% plot settings
+plt.style.use('default')
+plt.rc('axes', linewidth=0.5)
+plt.rcParams.update({'font.size': 8})
+plt.rcParams.update({'legend.labelspacing': 0.1})
+plt.matplotlib.rc('font', **{'sans-serif': 'Arial', 'family': 'sans-serif'})
+plt.rcParams['lines.linewidth'] = 1
+plt.rcParams['xtick.direction'] = 'out'
+plt.rcParams['ytick.direction'] = 'out'
+
+#%% Main code
 st.title('GR4J Gap Filling Tool')
 
 st.subheader('Upload Data')
