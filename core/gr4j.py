@@ -1,5 +1,4 @@
 _s1()
 _s2()
 simulate()
-cumecs_to_mmd()
-mmd_to_cumecs()
+
