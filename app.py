@@ -1,26 +1,36 @@
 import streamlit as st
 import numpy as np
+import pandas as pd
 
-from core.gapfill import identify_gaps
-from core.units import cumecs_to_mmd
+from core.gr4j import simulate
 
 st.title('GR4J Gap Filling Tool')
 
-example = [1, 2, np.nan, np.nan, 5]
+# synthetic climate series
 
-gaps = identify_gaps(example)
+n_days = 365
 
-st.subheader('Gap Detection')
+precip = np.full(n_days, 5.0)
+pet = np.full(n_days, 3.0)
 
-st.write(gaps)
+params = {
+    'X1': 500,
+    'X2': 0,
+    'X3': 100,
+    'X4': 2
+}
 
-st.subheader('Unit Conversion')
-
-q_mmd = cumecs_to_mmd(
-    q=10,
-    area_km2=100
+q_sim = simulate(
+    precip,
+    pet,
+    params
 )
 
-st.write(
-    f'10 m³/s over 100 km² = {q_mmd:.2f} mm/d'
+df = pd.DataFrame({
+    'Day': np.arange(n_days),
+    'Qsim_mm_d': q_sim
+})
+
+st.line_chart(
+    df.set_index('Day')
 )
