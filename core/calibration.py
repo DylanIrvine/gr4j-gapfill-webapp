@@ -181,6 +181,12 @@ def calibrate_gr4j(
 
     archive_df = archive_df.drop_duplicates()
 
+    archive_df = archive_df[np.isfinite(archive_df['Score'])]
+        
+    archive_df = archive_df.drop_duplicates()
+        
+    archive_df = archive_df.sort_values('Score',  ascending=False)                
+
     behavioural_df = archive_df[archive_df['Score']>=best_score - behavioural_delta]
     behavioural_df = behavioural_df.sort_values('Score',ascending=False)
                 
@@ -199,8 +205,19 @@ def calibrate_gr4j(
     }
 
     return {
-    'best_params': best_params,
-    'best_score': best_score,
-    'behavioural_df': behavioural_df
+        cal_results = calibrate_gr4j(
+            precip=rain,
+            pet=pet,
+            q_obs=q_obs_mmd,
+            warmup_days=warmup_days,
+            objective=objective,
+            maxiter=maxiter,
+            popsize=popsize,
+            behavioural_delta=behavioural_delta
+        )
+        
+        best_params = cal_results['best_params']
+        best_score = cal_results['best_score']
+        behavioural_df = cal_results['behavioural_df']
     }
 
