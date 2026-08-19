@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 
 from core.gr4j import simulate
+from core.units import cumecs_to_mmd
 
 st.title('GR4J Gap Filling Tool')
 
