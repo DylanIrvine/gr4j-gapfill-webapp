@@ -113,6 +113,35 @@ if uploaded_file is not None:
 
         flow = df[flow_col].to_numpy()
 
+        #---------------------------------
+        # Test GR4J on uploaded data
+        #---------------------------------
+
+        params = {
+            'X1': 500,
+            'X2': 0,
+            'X3': 100,
+            'X4': 2
+        }
+
+        q_sim_uploaded = simulate(
+            rain,
+            pet,
+            params
+        )
+
+        st.subheader('Uploaded Data GR4J Test')
+
+        df_sim = pd.DataFrame({
+            'Date': dates,
+            'Qsim_mm_d': q_sim_uploaded
+        })
+
+        st.line_chart(
+            df_sim.set_index('Date')
+        )
+
+        
         st.subheader('Data Summary')
 
         st.write(
