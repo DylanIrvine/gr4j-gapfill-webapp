@@ -306,11 +306,6 @@ if uploaded_file is not None:
             'Calibrate GR4J'
         )
 
-        if np.isfinite(q_obs_mmd).sum() < 730:
-
-            st.warning(
-                'Less than two years of observed flow available.'
-            )
 
         if run_calibration:
 
