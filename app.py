@@ -228,6 +228,46 @@ if uploaded_file is not None:
         
         st.pyplot(fig)
 
+        residuals = (
+            q_obs_mmd
+            - q_sim_uploaded
+        )
+        
+        fig_res = plt.figure(
+            figsize=(17/2.54, 6/2.54)
+        )
+        
+        ax = plt.axes(
+            [0.10, 0.18, 0.85, 0.72]
+        )
+        
+        ax.plot(
+            dates,
+            residuals,
+            color='firebrick',
+            linewidth=0.8
+        )
+        
+        ax.axhline(
+            0,
+            color='black',
+            linewidth=0.8
+        )
+        
+        ax.set_ylabel(
+            'Residual (Obs - Sim)'
+        )
+        
+        ax.set_xlabel(
+            'Date'
+        )
+        
+        st.subheader(
+            'Residuals'
+        )
+        
+        st.pyplot(fig_res)
+    
     except Exception as e:
 
         st.error(str(e))
