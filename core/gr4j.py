@@ -1,3 +1,8 @@
+#%%
+import math
+import numpy as np
+from math import tanh
+
 def _s1(tt, x4):
     if tt <= 0:
         return 0.0
