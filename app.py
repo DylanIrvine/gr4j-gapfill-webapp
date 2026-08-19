@@ -19,6 +19,11 @@ plt.rcParams['lines.linewidth'] = 1
 plt.rcParams['xtick.direction'] = 'out'
 plt.rcParams['ytick.direction'] = 'out'
 
+#%% helper functions
+def section_break():
+    st.markdown('---')
+
+
 #%% Main code
 st.title('GR4J Gap Filling Tool')
 
@@ -58,7 +63,7 @@ if uploaded_file is not None:
         'Flow Column',
         columns
     )
-
+    section_break()
     st.subheader('Catchment Information')
 
     area_km2 = st.number_input(
@@ -104,7 +109,8 @@ if uploaded_file is not None:
         else:
 
             q_obs_mmd = flow / area_km2
-
+            
+        section_break()
         st.subheader('Data Summary')
 
         st.write(
@@ -131,6 +137,7 @@ if uploaded_file is not None:
             f'Record ends: {dates.max()}'
         )
 
+        section_break()
         st.subheader('GR4J Parameters')
 
         x1 = st.number_input(
