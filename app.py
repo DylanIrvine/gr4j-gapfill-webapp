@@ -355,7 +355,7 @@ if uploaded_file is not None:
             )
             
         section_break()
-        st.subheader('Calibration')
+        st.subheader('3. Model Calibration')
         st.write('This section calibrates X1, X2, X3 and X4, producing a suite of outputs. Set your objective functionn and the number of warm up days below.')
 
         objective = st.selectbox(
