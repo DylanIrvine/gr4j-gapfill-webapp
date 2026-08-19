@@ -27,6 +27,13 @@ def section_break():
 #%% Main code
 st.title('GR4J Gap Filling Tool')
 
+st.write('The GR4J model (Modèle du Génie Rural à 4 paramètres Journalier) is a simple, lumped conceptual rainfall-runoff model. It simulates daily streamflow using 
+            only catchment-averaged daily precipitation and potential evapotranspiration data. The model by was originalyl published Perrin et al. (2003).\n\n The 
+            gr4j-gapfill-webapp provides users with an online version of the tool that can be applied with no coding required. Simply upload your file, following 
+            the workflow, and you have calibrated models, and/or gap-filled hydrographs.
+            
+            Perrin, Charles, Claude Michel, and Vazken Andréassian. "Improvement of a parsimonious model for streamflow simulation." Journal of Hydrology 279, no. 1 (2003): 275-289.')
+    
 st.subheader('Upload Data')
 
 uploaded_file = st.file_uploader(
@@ -350,7 +357,8 @@ if uploaded_file is not None:
             st.warning(
                 'Less than two years of observed flow available.'
             )
-        
+            
+        section_break()
         st.subheader('Calibration')
 
         objective = st.selectbox(
@@ -506,7 +514,7 @@ if uploaded_file is not None:
 
             st.pyplot(fig_cal)        
 
-# calibrated residual plot
+            # calibrated residual plot
             cal_log_residuals = (
                 np.log(q_obs_mmd + eps)
                 -
