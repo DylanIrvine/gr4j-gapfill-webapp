@@ -406,20 +406,24 @@ if uploaded_file is not None:
                 'Calibrating GR4J...'
             ):
 
-            cal_results = calibrate_gr4j(
-                precip=rain,
-                pet=pet,
-                q_obs=q_obs_mmd,
-                warmup_days=warmup_days,
-                objective=objective,
-                maxiter=maxiter,
-                popsize=popsize,
-                behavioural_delta=behavioural_delta
-            )
+                cal_results = calibrate_gr4j(
+                    precip=rain,
+                    pet=pet,
+                    q_obs=q_obs_mmd,
+                    warmup_days=warmup_days,
+                    objective=objective,
+                    maxiter=maxiter,
+                    popsize=popsize,
+                    behavioural_delta=behavioural_delta
+                )
             
             best_params = cal_results['best_params']
             best_score = cal_results['best_score']
             behavioural_df = cal_results['behavioural_df']
+
+            st.write(f'Behavioural Models Retained: {len(behavioural_df)}')
+            st.write(f'Best {objective}: {best_score:.3f}')
+            st.dataframe(behavioural_df.head(20))
 
             st.write( f'Behavioural Models Retained: {len(behavioural_df)}')
             st.write( f'Best {objective}: {best_score:.3f}')
