@@ -320,8 +320,8 @@ if uploaded_file is not None:
             'Simulated (mm/d)'
         )
         
-        ax.set_xscale('log')
-        ax.set_yscale('log')
+        ax.set_xscale('symlog')
+        ax.set_yscale('symlog')
         
         st.pyplot(fig_scatter)
 
