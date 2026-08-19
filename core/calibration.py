@@ -23,9 +23,7 @@ def objective_function(
         params
     )
 
-    mask = (
-        np.isfinite(q_obs)
-    )
+    mask = np.isfinite(q_obs)
 
     if warmup_days > 0:
 
@@ -61,8 +59,11 @@ def objective_function(
 
     return -score
 
+
 #%%
-def calibration_callback(xk, convergence):
+def calibration_callback(
+        xk,
+        convergence):
 
     global calibration_progress
 
@@ -74,11 +75,13 @@ def calibration_callback(xk, convergence):
         'X2': xk[1],
         'X3': xk[2],
         'X4': xk[3]
+
     }
 
     calibration_progress['convergence'] = convergence
 
     return False
+
 
 #%%
 def calibrate_gr4j(
@@ -92,45 +95,56 @@ def calibrate_gr4j(
 
     bounds = [
 
-        (1.0, 3000.0),   # X1
+        (1.0, 3000.0),
 
-        (-20.0, 5.0),    # X2
+        (-20.0, 5.0),
 
-        (1.0, 1000.0),   # X3
+        (1.0, 1000.0),
 
-        (0.5, 20.0)      # X4
+        (0.5, 20.0)
+
     ]
 
-        global calibration_progress
-        
-        calibration_progress = {
-            'generation': 0,
-            'params': None,
-            'convergence': np.nan
-        }
-        
-        result = differential_evolution(
+    global calibration_progress
+
+    calibration_progress = {
+
+        'generation': 0,
+
+        'params': None,
+
+        'convergence': np.nan
+
+    }
+
+    result = differential_evolution(
 
         objective_function,
-        
+
         bounds=bounds,
 
         args=(
 
             precip,
+
             pet,
+
             q_obs,
+
             warmup_days,
+
             objective
+
         ),
 
         maxiter=maxiter,
 
         popsize=popsize,
 
-        seed=1
+        seed=1,
 
-        callback=calibration_callback,
+        callback=calibration_callback
+
     )
 
     params = {
@@ -141,9 +155,10 @@ def calibrate_gr4j(
 
         'X3': result.x[2],
 
-        'X4': result.x[3]
+        'X4': result.x[3],
 
-        'ObjectiveValue': -result.fun            
+        'ObjectiveValue': -result.fun
+
     }
 
     return params
