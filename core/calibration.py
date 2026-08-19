@@ -170,7 +170,12 @@ def calibrate_gr4j(
 
     archive_df = pd.DataFrame(behavioural_archive)
 
+    archive_df = archive_df[np.isfinite(archive_df['Score'])]
+
+    archive_df = archive_df.drop_duplicates()
+
     behavioural_df = archive_df[archive_df['Score']>=best_score - behavioural_delta]
+    behavioural_df = behavioural_df.sort_values('Score',ascending=False)
                 
     best_params = {
 
