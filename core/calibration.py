@@ -113,6 +113,8 @@ def calibrate_gr4j(
         'X3': result.x[2],
 
         'X4': result.x[3]
+
+        'ObjectiveValue': -result.fun            
     }
 
     return params
