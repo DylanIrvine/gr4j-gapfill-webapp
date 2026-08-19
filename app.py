@@ -31,7 +31,7 @@ st.write('The GR4J model (Modèle du Génie Rural à 4 paramètres Journalier) i
     
 st.subheader('Upload Data')
 
-st.write('Upload a csv containing date, rainfall, PET, and streamflow. Dates must be in dd/mm/yyyy format. Rain and PET must be in mm/d, but flow can be m3/s, or ML/d, or mm/d')
+st.write('Upload a csv containing date, rainfall, PET, and streamflow. Dates must be in dd/mm/yyyy format. Rain and PET must be in mm/d, but flow can be m3/s, or ML/d, or mm/d.')
 
 uploaded_file = st.file_uploader(
     'Upload CSV',
@@ -207,7 +207,7 @@ if uploaded_file is not None:
         })
 
         section_break()
-        st.subheader('Observed vs Simulated (mm/d)')
+        st.subheader('Observed vs Simulated (mm/d) - using exploration parameters')
 
         col1, col2 = st.columns(2)
         
@@ -298,13 +298,11 @@ if uploaded_file is not None:
             'Date'
         )
         
-        st.subheader(
-            'Residuals'
-        )
+        st.subheader('Residuals - using exploration parameters')
         
         st.pyplot(fig_res)
 
-        st.subheader('Observed vs Simulated Scatter')
+        st.subheader('Observed vs Simulated Scatter - using exploration parameter')
         
         mask = (
             np.isfinite(q_obs_mmd)
@@ -358,6 +356,7 @@ if uploaded_file is not None:
             
         section_break()
         st.subheader('Calibration')
+        st.write('This section calibrates X1, X2, X3 and X4, producing a suite of outputs. Set your objective functionn and the number of warm up days below.')
 
         objective = st.selectbox(
             'Objective Function',
