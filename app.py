@@ -287,9 +287,8 @@ if uploaded_file is not None:
                 'Less than two years of observed flow available.'
             )
 
-        
         st.subheader('Calibration')
-        
+
         objective = st.selectbox(
             'Objective Function',
             [
@@ -297,61 +296,115 @@ if uploaded_file is not None:
                 'NSE'
             ]
         )
-        
+
         warmup_days = st.number_input(
             'Warm-up Days',
             value=730
         )
-        
+
         run_calibration = st.button(
             'Calibrate GR4J'
-)
-        if run_calibration:
-
-    with st.spinner(
-        'Calibrating GR4J...'
-    ):
-
-        best_params = calibrate_gr4j(
-            precip=rain,
-            pet=pet,
-            q_obs=q_obs_mmd,
-            warmup_days=warmup_days,
-            objective=objective
         )
 
-    st.subheader(
-        'Calibration Results'
-    )
+        if np.isfinite(q_obs_mmd).sum() < 730:
 
-    st.write(best_params)
+            st.warning(
+                'Less than two years of observed flow available.'
+            )
 
-        q_cal = simulate(
-        rain,
-        pet,
-        best_params
-    )
-    
-    kge_cal = kge(
-        q_obs_mmd,
-        q_cal
-    )
-    
-    nse_cal = nse(
-        q_obs_mmd,
-        q_cal
-    )
-    
-    st.metric(
-        'Calibrated KGE',
-        f'{kge_cal:.3f}'
-    )
-    
-    st.metric(
-        'Calibrated NSE',
-        f'{nse_cal:.3f}'
-    )
-    
-    except Exception as e:
+        if run_calibration:
+
+            with st.spinner(
+                'Calibrating GR4J...'
+            ):
+
+                best_params = calibrate_gr4j(
+                    precip=rain,
+                    pet=pet,
+                    q_obs=q_obs_mmd,
+                    warmup_days=warmup_days,
+                    objective=objective
+                )
+
+            st.subheader(
+                'Calibration Results'
+            )
+
+            st.json(best_params)
+
+            q_cal = simulate(
+                rain,
+                pet,
+                best_params
+            )
+
+            kge_cal = kge(
+                q_obs_mmd,
+                q_cal
+            )
+
+            nse_cal = nse(
+                q_obs_mmd,
+                q_cal
+            )
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+
+                st.metric(
+                    'Calibrated KGE',
+                    f'{kge_cal:.3f}'
+                )
+
+            with col2:
+
+                st.metric(
+                    'Calibrated NSE',
+                    f'{nse_cal:.3f}'
+                )
+
+            fig_cal = plt.figure(
+                figsize=(17/2.54, 8/2.54)
+            )
+
+            ax = plt.axes(
+                [0.10, 0.15, 0.85, 0.75]
+            )
+
+            ax.plot(
+                dates,
+                q_obs_mmd,
+                color='black',
+                alpha=0.6,
+                linewidth=1,
+                label='Observed'
+            )
+
+            ax.plot(
+                dates,
+                q_cal,
+                color='green',
+                alpha=0.6,
+                linewidth=1,
+                label='Calibrated GR4J'
+            )
+
+            ax.legend()
+
+            ax.set_ylabel(
+                'Flow (mm/d)'
+            )
+
+            ax.set_xlabel(
+                'Date'
+            )
+
+            st.subheader(
+                'Calibrated Hydrograph'
+            )
+
+            st.pyplot(fig_cal)        
+
 
         st.error(str(e))
