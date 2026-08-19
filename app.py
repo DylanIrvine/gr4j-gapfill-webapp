@@ -278,52 +278,52 @@ if uploaded_file is not None:
         
         st.pyplot(fig_res)
 
-                    fig_scatter = plt.figure(
-                figsize=(8/2.54, 8/2.54)
-            )
-            
-            ax = plt.axes(
-                [0.18,0.18,0.72,0.72]
-            )
-            
-            mask = (
-                np.isfinite(q_obs_mmd)
-                &
-                np.isfinite(q_sim_uploaded)
-            )
-            
-            ax.scatter(
-                q_obs_mmd[mask],
-                q_sim_uploaded[mask],
-                s=5,
-                alpha=0.3
-            )
-            
-            lim = np.nanmax(
-                [
-                    np.nanmax(q_obs_mmd),
-                    np.nanmax(q_sim_uploaded)
-                ]
-            )
-            
-            ax.plot(
-                [0, lim],
-                [0, lim],
-                'k--'
-            )
-            
-            ax.set_xlabel(
-                'Observed (mm/d)'
-            )
-            
-            ax.set_ylabel(
-                'Simulated (mm/d)'
-            )
-            
-            ax.set_xscale('log')
-            ax.set_yscale('log')
-            
-            st.pyplot(fig_scatter)
+        fig_scatter = plt.figure(
+            figsize=(8/2.54, 8/2.54)
+        )
+        
+        ax = plt.axes(
+            [0.18,0.18,0.72,0.72]
+        )
+        
+        mask = (
+            np.isfinite(q_obs_mmd)
+            &
+            np.isfinite(q_sim_uploaded)
+        )
+        
+        ax.scatter(
+            q_obs_mmd[mask],
+            q_sim_uploaded[mask],
+            s=5,
+            alpha=0.3
+        )
+        
+        lim = np.nanmax(
+            [
+                np.nanmax(q_obs_mmd),
+                np.nanmax(q_sim_uploaded)
+            ]
+        )
+        
+        ax.plot(
+            [0, lim],
+            [0, lim],
+            'k--'
+        )
+        
+        ax.set_xlabel(
+            'Observed (mm/d)'
+        )
+        
+        ax.set_ylabel(
+            'Simulated (mm/d)'
+        )
+        
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        
+        st.pyplot(fig_scatter)
 
         if np.isfinite(q_obs_mmd).sum() < 730:
         
