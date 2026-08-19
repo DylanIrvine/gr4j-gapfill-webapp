@@ -35,11 +35,11 @@ def identify_gaps(q_obs):
             zip(starts, ends),
             start=1):
 
-        gaps.append({
-            'gap_id': gap_id,
-            'start_idx': start,
-            'end_idx': end,
-            'length_days': end - start + 1
-        })
+    gaps.append({
+        'gap_id': int(gap_id),
+        'start_idx': int(start),
+        'end_idx': int(end),
+        'length_days': int(end - start + 1)
+    })
 
     return gaps
