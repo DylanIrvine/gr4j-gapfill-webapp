@@ -34,3 +34,24 @@ df = pd.DataFrame({
 st.line_chart(
     df.set_index('Day')
 )
+
+
+
+st.title('GR4J Gap Filling Tool')
+
+uploaded_file = st.file_uploader(
+    'Upload CSV',
+    type=['csv']
+)
+
+if uploaded_file is not None:
+
+    df = pd.read_csv(uploaded_file)
+
+    st.subheader('Preview')
+
+    st.dataframe(df.head())
+
+    st.subheader('Columns')
+
+    st.write(df.columns.tolist())
