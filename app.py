@@ -278,6 +278,9 @@ if uploaded_file is not None:
         
         st.pyplot(fig_res)
 
+        st.subheader(
+        'Observed vs Simulated Scatter'
+        )    
         fig_scatter = plt.figure(
             figsize=(8/2.54, 8/2.54)
         )
