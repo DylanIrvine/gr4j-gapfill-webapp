@@ -31,6 +31,8 @@ df = pd.DataFrame({
     'Qsim_mm_d': q_sim
 })
 
+st.subheader('Synthetic GR4J Test')
+
 st.line_chart(
     df.set_index('Day')
 )
