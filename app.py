@@ -35,6 +35,7 @@ st.line_chart(
     df.set_index('Day')
 )
 
+st.subheader('Upload Data')
 uploaded_file = st.file_uploader(
     'Upload CSV',
     type=['csv']
