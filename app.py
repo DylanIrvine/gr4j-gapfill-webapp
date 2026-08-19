@@ -406,6 +406,6 @@ if uploaded_file is not None:
 
             st.pyplot(fig_cal)        
 
-except Exception as e:
-
-st.error(str(e))
+    except Exception as e:
+    
+        st.error(str(e))
