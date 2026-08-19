@@ -161,6 +161,16 @@ if uploaded_file is not None:
             params
         )
 
+        kge_value = kge(
+            q_obs_mmd,
+            q_sim_uploaded
+        )
+        
+        nse_value = nse(
+            q_obs_mmd,
+            q_sim_uploaded
+        )
+        
         df_sim = pd.DataFrame({
             'Date': dates,
             'Observed_mm_d': q_obs_mmd,
@@ -171,9 +181,52 @@ if uploaded_file is not None:
             'Observed vs Simulated (mm/d)'
         )
 
-        st.line_chart(
-            df_sim.set_index('Date')
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.metric(
+                'KGE',
+                f'{kge_value:.3f}'
+            )
+        
+        with col2:
+            st.metric(
+                'NSE',
+                f'{nse_value:.3f}'
+            )
+        
+        fig = plt.figure(
+            figsize=(17/2.54, 8/2.54)
         )
+        
+        ax = plt.axes(
+            [0.10, 0.15, 0.85, 0.75]
+        )
+        
+        ax.plot(
+            dates,
+            q_obs_mmd,
+            color='black',
+            alpha=0.6,
+            linewidth=1,
+            label='Observed'
+        )
+        
+        ax.plot(
+            dates,
+            q_sim_uploaded,
+            color='royalblue',
+            alpha=0.6,
+            linewidth=1,
+            label='GR4J'
+        )
+        
+        ax.legend()
+        
+        ax.set_ylabel('Flow (mm/d)')
+        ax.set_xlabel('Date')
+        
+        st.pyplot(fig)
 
     except Exception as e:
 
