@@ -346,6 +346,22 @@ if uploaded_file is not None:
             value=730
         )
 
+        st.subheader('Calibration')
+        
+        objective = st.selectbox(
+            'Objective Function',
+            [
+                'KGE',
+                'NSE'
+            ]
+        )
+        
+        warmup_days = st.number_input(
+            'Warm-up Days',
+            value=730
+        )
+        
+        
         run_calibration = st.button(
             'Calibrate GR4J'
         )
@@ -362,7 +378,9 @@ if uploaded_file is not None:
                     pet=pet,
                     q_obs=q_obs_mmd,
                     warmup_days=warmup_days,
-                    objective=objective
+                    objective=objective,
+                    maxiter=maxiter,
+                    popsize=popsize
                 )
 
             st.subheader(
