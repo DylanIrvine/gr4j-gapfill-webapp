@@ -302,7 +302,7 @@ if uploaded_file is not None:
             alpha=0.3
         )
 
-          lim_lo = np.nanmin(
+        lim_lo = np.nanmin(
             [
                 np.nanmin(q_obs_mmd),
                 np.nanmin(q_sim_uploaded)
