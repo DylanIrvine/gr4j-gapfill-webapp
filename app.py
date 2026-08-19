@@ -14,10 +14,10 @@ precip = np.full(n_days, 5.0)
 pet = np.full(n_days, 3.0)
 
 params = {
-    'X1': 500,
-    'X2': 0,
-    'X3': 100,
-    'X4': 2
+    'X1': x1,
+    'X2': x2,
+    'X3': x3,
+    'X4': x4
 }
 
 q_sim = simulate(
