@@ -371,6 +371,15 @@ if uploaded_file is not None:
             value=730
         )
 
+        st.write( 'Models within this distance of the best objective score are retained as behavioural models.')
+        behavioural_delta = st.number_input(
+            'Behavioural Model Delta',
+            value=0.05,
+            min_value=0.001,
+            max_value=0.50,
+            step=0.01
+        )
+        
         with st.expander(
             'Advanced Calibration Settings'
         ):
