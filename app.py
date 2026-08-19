@@ -83,3 +83,63 @@ if uploaded_file is not None:
         'PET': pet_col,
         'Flow': flow_col
     })
+
+st.subheader('Catchment Information')
+
+area_km2 = st.number_input(
+    'Catchment Area (km²)',
+    min_value=0.001,
+    value=1000.0,
+    step=1.0
+)
+
+flow_units = st.selectbox(
+    'Flow Units',
+    [
+        'm3/s',
+        'ML/d',
+        'mm/d'
+    ]
+)
+
+st.write(
+    f'Catchment Area: {area_km2:.1f} km²'
+)
+
+st.write(
+    f'Flow Units: {flow_units}'
+)
+
+try:
+
+    dates = pd.to_datetime(
+        df[date_col]
+    )
+
+    rain = df[rain_col].to_numpy()
+
+    pet = df[pet_col].to_numpy()
+
+    flow = df[flow_col].to_numpy()
+
+    st.subheader('Data Summary')
+
+    st.write(
+        f'Record Length: {len(df)} days'
+    )
+
+    st.write(
+        f'Flow Missing Values: {pd.isna(flow).sum()}'
+    )
+
+    st.write(
+        f'Rain Missing Values: {pd.isna(rain).sum()}'
+    )
+
+    st.write(
+        f'PET Missing Values: {pd.isna(pet).sum()}'
+    )
+
+except Exception as e:
+
+    st.error(str(e))
