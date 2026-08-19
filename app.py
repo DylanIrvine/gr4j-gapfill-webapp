@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
 
+from core.metrics import kge
+from core.metrics import nse
 from core.gr4j import simulate
 from core.units import cumecs_to_mmd
 
