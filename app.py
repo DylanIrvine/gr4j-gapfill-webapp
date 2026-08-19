@@ -31,6 +31,8 @@ st.write('The GR4J model (Modèle du Génie Rural à 4 paramètres Journalier) i
     
 st.subheader('Upload Data')
 
+st.write('Upload a csv containing date, rainfall, PET, and streamflow. Dates must be in dd/mm/yyyy format. Rain and PET must be in mm/d, but flow can be m3/s, or ML/d, or mm/d)
+
 uploaded_file = st.file_uploader(
     'Upload CSV',
     type=['csv']
