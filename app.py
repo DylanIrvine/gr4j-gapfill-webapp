@@ -104,9 +104,10 @@ if uploaded_file is not None:
     )
 
     try:
-
+        # Hard coded to have day first for now, but this may need to be corrected later
         dates = pd.to_datetime(
-            df[date_col]
+            df[date_col],
+            dayfirst=True
         )
 
         rain = df[rain_col].to_numpy()
