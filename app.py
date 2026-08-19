@@ -495,6 +495,119 @@ if uploaded_file is not None:
             )
 
             st.pyplot(fig_cal)        
+
+# calibrated residual plot
+            cal_log_residuals = (
+                np.log(q_obs_mmd + eps)
+                -
+                np.log(q_cal + eps)
+            )
+            
+            fig_cal_res = plt.figure(figsize=(17/2.54, 6/2.54))
+            ax = fig_cal_res.add_axes([0.10, 0.18, 0.85, 0.72])
+            
+            ax.plot(
+                dates,
+                cal_log_residuals,
+                color='darkgreen'
+            )
+            
+            ax.axhline(
+                0,
+                color='black',
+                linewidth=0.8
+            )
+            
+            ax.set_ylabel('Log Residual')
+            ax.set_xlabel('Date')
+            
+            st.subheader('Calibrated Residuals')
+            
+            st.pyplot(fig_cal_res)
+            
+            # calibrated scatter plot
+            st.subheader('Calibrated Scatter Plot')
+            
+            mask = (
+                np.isfinite(q_obs_mmd)
+                & np.isfinite(q_cal)
+                & (q_obs_mmd > 0)
+                & (q_cal > 0)
+            )
+            
+            fig_cal_scatter = plt.figure(figsize=(8/2.54, 8/2.54))
+            ax = fig_cal_scatter.add_axes[0.10, 0.18, 0.85 ( 0.72])
+            
+            ax.scatter(
+                q_obs_mmd[mask],
+                q_cal[mask],
+                s=5,
+                alpha=0.3
+            )
+            
+            lim_lo = min(
+                np.nanmin(q_obs_mmd[mask]),
+                np.nanmin(q_cal[mask])
+            )
+            
+            lim_hi = max(
+                np.nanmax(q_obs_mmd[mask]),
+                np.nanmax(q_cal[mask])
+            )
+            
+            ax.plot(
+                [lim_lo, lim_hi],
+                [lim_lo, lim_hi],
+                'k--'
+            )
+            
+            ax.set_xlim(lim_lo, lim_hi)
+            ax.set_ylim(lim_lo, lim_hi)
+            
+            ax.set_xscale('symlog')
+            ax.set_yscale('symlog')
+            
+            ax.set_xlabel('Observed (mm/d)')
+            ax.set_ylabel('Calibrated GR4J (mm/d)')
+            
+            st.pyplot(fig_cal_scatter)
+            
+            
+            
+            # calibrated flow duration curve
+            def fdc(q):
+            
+                q = q[np.isfinite(q)]
+                q = np.sort(q)[::-1]
+            
+                exceedance = (
+                    np.arange(1, len(q)+1)
+                    /
+                    (len(q)+1)
+                    * 100
+                )
+            
+                return exceedance, q
+            
+            ex_obs, q_obs_fdc = fdc(q_obs_mmd)
+            ex_cal, q_cal_fdc = fdc(q_cal)
+            
+            fig_fdc = plt.figure(figsize=(10/2.54, 8/2.54))
+            ax = fig_fdc.add_axes([0.15, 0.15, 0.75, 0.75])
+            
+            ax.plot(ex_obs, q_obs_fdc, label='Observed')
+            ax.plot(ex_cal, q_cal_fdc, label='Calibrated')
+            
+            ax.set_yscale('log')
+            
+            ax.set_xlabel('Exceedance (%)')
+            ax.set_ylabel('Flow (mm/d)')
+            
+            ax.legend()
+            
+            st.subheader('Flow Duration Curve')
+            
+            st.pyplot(fig_fdc)
     
     except Exception as e:
     
