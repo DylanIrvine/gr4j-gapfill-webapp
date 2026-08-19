@@ -289,22 +289,17 @@ if uploaded_file is not None:
         
         st.pyplot(fig_res)
 
-        st.subheader(
-        'Observed vs Simulated Scatter'
-        )    
-        fig_scatter = plt.figure(
-            figsize=(8/2.54, 8/2.54)
-        )
-        
-        ax = plt.axes(
-            [0.18,0.18,0.72,0.72]
-        )
+        st.subheader('Observed vs Simulated Scatter')
         
         mask = (
             np.isfinite(q_obs_mmd)
-            &
-            np.isfinite(q_sim_uploaded)
+            & np.isfinite(q_sim_uploaded)
+            & (q_obs_mmd > 0)
+            & (q_sim_uploaded > 0)
         )
+        
+        fig_scatter = plt.figure(figsize=(8/2.54, 8/2.54))
+        ax = fig_scatter.add_axes([0.18, 0.18, 0.72, 0.72])
         
         ax.scatter(
             q_obs_mmd[mask],
@@ -312,20 +307,15 @@ if uploaded_file is not None:
             s=5,
             alpha=0.3
         )
-
-        lim_lo = np.nanmin(
-            [
-                np.nanmin(q_obs_mmd),
-                np.nanmin(q_sim_uploaded)
-            ]
-        )      
-
         
-        lim_hi = np.nanmax(
-            [
-                np.nanmax(q_obs_mmd),
-                np.nanmax(q_sim_uploaded)
-            ]
+        lim_lo = min(
+            np.nanmin(q_obs_mmd[mask]),
+            np.nanmin(q_sim_uploaded[mask])
+        )
+        
+        lim_hi = max(
+            np.nanmax(q_obs_mmd[mask]),
+            np.nanmax(q_sim_uploaded[mask])
         )
         
         ax.plot(
@@ -333,23 +323,18 @@ if uploaded_file is not None:
             [lim_lo, lim_hi],
             'k--'
         )
-
+        
         ax.set_xlim(lim_lo, lim_hi)
-        ax.set_ylim(lim_lo, lim_hi)       
+        ax.set_ylim(lim_lo, lim_hi)
         
-        ax.set_xlabel(
-            'Observed (mm/d)'
-        )
-        
-        ax.set_ylabel(
-            'Simulated (mm/d)'
-        )
+        ax.set_xlabel('Observed (mm/d)')
+        ax.set_ylabel('Simulated (mm/d)')
         
         ax.set_xscale('symlog')
         ax.set_yscale('symlog')
         
         st.pyplot(fig_scatter)
-
+        
         if np.isfinite(q_obs_mmd).sum() < 730:
         
             st.warning(
