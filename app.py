@@ -138,7 +138,11 @@ if uploaded_file is not None:
         )
 
         section_break()
-        st.subheader('GR4J Parameters')
+
+        st.subheader('GR4J Parameter Exploration')
+
+        st.write('Adjust the four GR4J parameters below to explore how they affect simulated streamflow before running automatic calibration.'
+        )
 
         x1 = st.number_input(
             'X1 Production Store Capacity (mm)',
@@ -197,9 +201,8 @@ if uploaded_file is not None:
             'Simulated_mm_d': q_sim_uploaded
         })
 
-        st.subheader(
-            'Observed vs Simulated (mm/d)'
-        )
+        section_break()
+        st.subheader('Observed vs Simulated (mm/d)')
 
         col1, col2 = st.columns(2)
         
