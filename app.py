@@ -237,13 +237,10 @@ if uploaded_file is not None:
 
         eps = 0.01
         
-        rel_residuals = (
-            residuals
-            /
-            np.maximum(
-                q_obs_mmd,
-                eps
-            )
+        log_residuals = (
+            np.log(q_obs_mmd + eps)
+            -
+            np.log(q_sim_uploaded + eps)
         )
                 
         fig_res = plt.figure(
@@ -256,7 +253,7 @@ if uploaded_file is not None:
         
         ax.plot(
             dates,
-            rel_residuals,
+            log_residuals,
             color='firebrick',
             linewidth=0.8
         )
@@ -268,7 +265,7 @@ if uploaded_file is not None:
         )
         
         ax.set_ylabel(
-            'Relative Residual (Obs - Sim)/Obs'
+            'Log Residual'
         )
         
         ax.set_xlabel(
