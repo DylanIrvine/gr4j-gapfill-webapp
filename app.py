@@ -43,12 +43,43 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
 
-    df = pd.read_csv(uploaded_file)
+    df_upload = pd.read_csv(uploaded_file)
 
-    st.subheader('Preview')
+    st.subheader('Data Preview')
 
-    st.dataframe(df.head())
+    st.dataframe(
+        df_upload.head()
+    )
 
-    st.subheader('Columns')
+    st.subheader('Column Selection')
 
-    st.write(df.columns.tolist())
+    columns = df_upload.columns.tolist()
+
+    date_col = st.selectbox(
+        'Date Column',
+        columns
+    )
+
+    rain_col = st.selectbox(
+        'Rain Column',
+        columns
+    )
+
+    pet_col = st.selectbox(
+        'PET Column',
+        columns
+    )
+
+    flow_col = st.selectbox(
+        'Flow Column',
+        columns
+    )
+
+    st.write('Selected Columns')
+
+    st.write({
+        'Date': date_col,
+        'Rain': rain_col,
+        'PET': pet_col,
+        'Flow': flow_col
+    })
