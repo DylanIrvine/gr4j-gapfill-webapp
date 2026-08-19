@@ -510,7 +510,7 @@ if uploaded_file is not None:
             ax.plot(
                 dates,
                 q_cal,
-                color='green',
+                color='#0DB14B',
                 alpha=0.6,
                 linewidth=1,
                 label='Calibrated GR4J'
@@ -545,7 +545,7 @@ if uploaded_file is not None:
             ax.plot(
                 dates,
                 cal_log_residuals,
-                color='darkgreen'
+                color='#0DB14B'
             )
             
             ax.axhline(
