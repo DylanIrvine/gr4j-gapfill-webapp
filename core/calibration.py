@@ -20,11 +20,18 @@ def objective_function(
         warmup_days=730,
         objective='KGE'):
 
-    q_sim = simulate(
-        precip,
-        pet,
-        params
-    )
+        param_dict = {
+            'X1': params[0],
+            'X2': params[1],
+            'X3': params[2],
+            'X4': params[3]
+        }
+        
+        q_sim = simulate(
+            precip,
+            pet,
+            param_dict
+        )
 
     mask = np.isfinite(q_obs)
 
