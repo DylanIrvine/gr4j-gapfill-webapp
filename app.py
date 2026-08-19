@@ -7,37 +7,6 @@ from core.units import cumecs_to_mmd
 
 st.title('GR4J Gap Filling Tool')
 
-# synthetic climate series
-
-n_days = 365
-
-precip = np.full(n_days, 5.0)
-pet = np.full(n_days, 3.0)
-
-params = {
-    'X1': x1,
-    'X2': x2,
-    'X3': x3,
-    'X4': x4
-}
-
-q_sim = simulate(
-    precip,
-    pet,
-    params
-)
-
-df = pd.DataFrame({
-    'Day': np.arange(n_days),
-    'Qsim_mm_d': q_sim
-})
-
-st.subheader('Synthetic GR4J Test')
-
-st.line_chart(
-    df.set_index('Day')
-)
-
 st.subheader('Upload Data')
 
 uploaded_file = st.file_uploader(
