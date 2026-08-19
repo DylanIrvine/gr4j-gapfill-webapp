@@ -60,3 +60,59 @@ def objective_function(
         )
 
     return -score
+
+#%%
+def calibrate_gr4j(
+        precip,
+        pet,
+        q_obs,
+        warmup_days=730,
+        objective='KGE',
+        maxiter=25,
+        popsize=12):
+
+    bounds = [
+
+        (1.0, 3000.0),   # X1
+
+        (-20.0, 5.0),    # X2
+
+        (1.0, 1000.0),   # X3
+
+        (0.5, 20.0)      # X4
+    ]
+
+    result = differential_evolution(
+
+        objective_function,
+
+        bounds=bounds,
+
+        args=(
+
+            precip,
+            pet,
+            q_obs,
+            warmup_days,
+            objective
+        ),
+
+        maxiter=maxiter,
+
+        popsize=popsize,
+
+        seed=1
+    )
+
+    params = {
+
+        'X1': result.x[0],
+
+        'X2': result.x[1],
+
+        'X3': result.x[2],
+
+        'X4': result.x[3]
+    }
+
+    return params
