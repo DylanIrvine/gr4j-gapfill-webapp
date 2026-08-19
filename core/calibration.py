@@ -1,12 +1,15 @@
 #%%
 import numpy as np
-
+import pandas as pd
 from scipy.optimize import differential_evolution
 
 from core.gr4j import simulate
 from core.metrics import kge
 from core.metrics import nse
 
+
+#%%  List to store suitable models
+behavioural_archive = []
 
 #%%
 def objective_function(
@@ -43,6 +46,7 @@ def objective_function(
             q_sim_fit
         )
 
+                
     elif objective == 'NSE':
 
         score = nse(
@@ -57,6 +61,16 @@ def objective_function(
             q_sim_fit
         )
 
+    global behavioural_archive
+        
+    behavioural_archive.append({
+        'X1': params[0],
+        'X2': params[1],
+        'X3': params[2],
+        'X4': params[3],
+        'Score': score
+    })
+       
     return -score
 
 
@@ -91,7 +105,8 @@ def calibrate_gr4j(
         warmup_days=730,
         objective='KGE',
         maxiter=25,
-        popsize=12):
+        popsize=12,
+        behavioural_delta=0.05):
 
     bounds = [
 
@@ -117,6 +132,10 @@ def calibrate_gr4j(
 
     }
 
+    global behavioural_archive
+        
+    behavioural_archive = []
+                
     result = differential_evolution(
 
         objective_function,
@@ -147,7 +166,13 @@ def calibrate_gr4j(
 
     )
 
-    params = {
+    best_score = -result.fun
+
+    archive_df = pd.DataFrame(behavioural_archive)
+
+    behavioural_df = archive_df[archive_df['Score']>=best_score - behavioural_delta]
+                
+    best_params = {
 
         'X1': result.x[0],
 
@@ -161,4 +186,9 @@ def calibrate_gr4j(
 
     }
 
-    return params
+    return {
+    'best_params': best_params,
+    'best_score': best_score,
+    'behavioural_df': behavioural_df
+    }
+
