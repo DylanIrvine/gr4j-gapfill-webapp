@@ -62,6 +62,25 @@ def objective_function(
     return -score
 
 #%%
+def calibration_callback(xk, convergence):
+
+    global calibration_progress
+
+    calibration_progress['generation'] += 1
+
+    calibration_progress['params'] = {
+
+        'X1': xk[0],
+        'X2': xk[1],
+        'X3': xk[2],
+        'X4': xk[3]
+    }
+
+    calibration_progress['convergence'] = convergence
+
+    return False
+
+#%%
 def calibrate_gr4j(
         precip,
         pet,
@@ -82,10 +101,18 @@ def calibrate_gr4j(
         (0.5, 20.0)      # X4
     ]
 
-    result = differential_evolution(
+        global calibration_progress
+        
+        calibration_progress = {
+            'generation': 0,
+            'params': None,
+            'convergence': np.nan
+        }
+        
+        result = differential_evolution(
 
         objective_function,
-
+        
         bounds=bounds,
 
         args=(
@@ -102,6 +129,8 @@ def calibrate_gr4j(
         popsize=popsize,
 
         seed=1
+
+        callback=calibration_callback,
     )
 
     params = {
