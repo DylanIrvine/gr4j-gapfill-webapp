@@ -1,11 +1,13 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 
 from core.metrics import kge
 from core.metrics import nse
 from core.gr4j import simulate
 from core.units import cumecs_to_mmd
+from core.calibration import calibrate_gr4j
 
 st.title('GR4J Gap Filling Tool')
 
@@ -233,10 +235,17 @@ if uploaded_file is not None:
             - q_sim_uploaded
         )
 
-        rel_residuals = (
-            residuals/ q_obs_mmd      
-        )
+        eps = 0.01
         
+        rel_residuals = (
+            residuals
+            /
+            np.maximum(
+                q_obs_mmd,
+                eps
+            )
+        )
+                
         fig_res = plt.figure(
             figsize=(17/2.54, 6/2.54)
         )
@@ -271,6 +280,70 @@ if uploaded_file is not None:
         )
         
         st.pyplot(fig_res)
+
+        st.subheader('Calibration')
+        
+        objective = st.selectbox(
+            'Objective Function',
+            [
+                'KGE',
+                'NSE'
+            ]
+        )
+        
+        warmup_days = st.number_input(
+            'Warm-up Days',
+            value=730
+        )
+        
+        run_calibration = st.button(
+            'Calibrate GR4J'
+)
+        if run_calibration:
+
+    with st.spinner(
+        'Calibrating GR4J...'
+    ):
+
+        best_params = calibrate_gr4j(
+            precip=rain,
+            pet=pet,
+            q_obs=q_obs_mmd,
+            warmup_days=warmup_days,
+            objective=objective
+        )
+
+    st.subheader(
+        'Calibration Results'
+    )
+
+    st.write(best_params)
+
+        q_cal = simulate(
+        rain,
+        pet,
+        best_params
+    )
+    
+    kge_cal = kge(
+        q_obs_mmd,
+        q_cal
+    )
+    
+    nse_cal = nse(
+        q_obs_mmd,
+        q_cal
+    )
+    
+    st.metric(
+        'Calibrated KGE',
+        f'{kge_cal:.3f}'
+    )
+    
+    st.metric(
+        'Calibrated NSE',
+        f'{nse_cal:.3f}'
+    )
     
     except Exception as e:
 
