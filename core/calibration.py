@@ -20,18 +20,18 @@ def objective_function(
         warmup_days=730,
         objective='KGE'):
 
-        param_dict = {
+    param_dict = {
             'X1': params[0],
             'X2': params[1],
             'X3': params[2],
             'X4': params[3]
-        }
+    }
         
-        q_sim = simulate(
+    q_sim = simulate(
             precip,
             pet,
             param_dict
-        )
+    )
 
     mask = np.isfinite(q_obs)
 
@@ -204,20 +204,9 @@ def calibrate_gr4j(
 
     }
 
-    return {
-        cal_results = calibrate_gr4j(
-            precip=rain,
-            pet=pet,
-            q_obs=q_obs_mmd,
-            warmup_days=warmup_days,
-            objective=objective,
-            maxiter=maxiter,
-            popsize=popsize,
-            behavioural_delta=behavioural_delta
-        )
-        
-        best_params = cal_results['best_params']
-        best_score = cal_results['best_score']
-        behavioural_df = cal_results['behavioural_df']
-    }
+return {
+    'best_params': best_params,
+    'best_score': best_score,
+    'behavioural_df': behavioural_df
+}
 
