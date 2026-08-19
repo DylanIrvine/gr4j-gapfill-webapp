@@ -162,7 +162,14 @@ if uploaded_file is not None:
         st.write(
             f'PET Missing Values: {pd.isna(pet).sum()}'
         )
+        st.write(
+            f'Record starts: {dates.min()}'
+        )
 
+        st.write(
+            f'Record ends: {dates.max()}'
+        )
+    
     except Exception as e:
 
         st.error(str(e))
