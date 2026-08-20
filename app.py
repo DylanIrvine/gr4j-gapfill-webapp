@@ -696,6 +696,7 @@ if uploaded_file is not None:
             st.pyplot(fig_cal_scatter)
             
             # behavioural parameter distributions
+            fig_hist = plt.figure(figsize=(17/2.54, 10/2.54))
             
             st.subheader(
                 'Behavioural Parameter Distributions'
