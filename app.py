@@ -700,7 +700,10 @@ if uploaded_file is not None:
             st.subheader(
                 'Behavioural Parameter Distributions'
             )
+            params = ['X1', 'X2', 'X3', 'X4']
 
+            colours = ['#FCB711','#F37021','#CC004C','#6460AA']
+            
             for i, (param, colour) in enumerate(
                 zip(params, colours)
             ):
