@@ -400,10 +400,14 @@ if uploaded_file is not None:
             'Calibrate GR4J'
         )
 
+        progress = st.progress(0)
+        
+        n_models = len(behavioural_df)
+        
         if run_calibration:
 
             with st.spinner(
-                'Calibrating GR4J...'
+                'Calibrating GR4J and building behavioural ensemble...'
             ):
 
                 cal_results = calibrate_gr4j(
@@ -582,7 +586,7 @@ if uploaded_file is not None:
             )
 
             st.subheader(
-                'Calibrated Hydrograph'
+                'Behavioural Ensemble Hydrograph'
             )
 
             st.pyplot(fig_cal)        
