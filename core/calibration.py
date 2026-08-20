@@ -10,6 +10,7 @@ from core.metrics import nse
 
 #%%  List to store suitable models
 behavioural_archive = []
+MAX_BEHAVIOURAL_MODELS = 100
 
 #%%
 def objective_function(
@@ -196,10 +197,10 @@ def calibrate_gr4j(
         ascending=False
     )
 
-    max_behavioural_models = 100
+
 
     behavioural_df = behavioural_df.head(
-        max_behavioural_models
+        MAX_BEHAVIOURAL_MODELS
     )
                 
     best_params = {
