@@ -421,6 +421,47 @@ if uploaded_file is not None:
             best_score = cal_results['best_score']
             behavioural_df = cal_results['behavioural_df']
 
+            # for the ensemble of retained results
+            ensemble = []
+            
+            for _, row in behavioural_df.iterrows():
+            
+                params = {
+                    'X1': row['X1'],
+                    'X2': row['X2'],
+                    'X3': row['X3'],
+                    'X4': row['X4']
+                }
+            
+                q_sim = simulate(
+                    rain,
+                    pet,
+                    params
+                )
+            
+                ensemble.append(q_sim)
+            
+            ensemble = np.array(ensemble)
+            
+            # retain selected percentiles for plotting and outputs
+            q05 = np.nanpercentile(
+                ensemble,
+                5,
+                axis=0
+            )
+            
+            q50 = np.nanpercentile(
+                ensemble,
+                50,
+                axis=0
+            )
+            
+            q95 = np.nanpercentile(
+                ensemble,
+                95,
+                axis=0
+            )
+            
             st.write(f'Behavioural Models Retained: {len(behavioural_df)}')
             st.write(f'Best {objective}: {best_score:.3f}')
             st.dataframe(behavioural_df.head(20))
@@ -507,13 +548,29 @@ if uploaded_file is not None:
                 label='Observed'
             )
 
+            ax.fill_between(
+                dates,
+                q05,
+                q95,
+                color='#0DB14B',
+                alpha=0.25,
+                label='5-95% behavioural range'
+            )
+            
             ax.plot(
                 dates,
-                q_cal,
+                q50,
                 color='#0DB14B',
+                linewidth=1.5,
+                label='Behavioural median'
+            )
+            
+            ax.plot(
+                dates,
+                q_obs_mmd,
+                color='black',
                 alpha=0.6,
-                linewidth=1,
-                label='Calibrated GR4J'
+                label='Observed'
             )
 
             ax.legend()
@@ -625,6 +682,34 @@ if uploaded_file is not None:
                 )
             
                 return exceedance, q
+
+            fdc_ensemble = []
+                
+            for sim in ensemble:
+            
+                _, q_fdc = fdc(sim)
+            
+                fdc_ensemble.append(q_fdc)
+
+            fdc_ensemble = np.array(fdc_ensemble)
+            
+            fdc05 = np.nanpercentile(
+                fdc_ensemble,
+                5,
+                axis=0
+            )
+            
+            fdc50 = np.nanpercentile(
+                fdc_ensemble,
+                50,
+                axis=0
+            )
+            
+            fdc95 = np.nanpercentile(
+                fdc_ensemble,
+                95,
+                axis=0
+            )
             
             ex_obs, q_obs_fdc = fdc(q_obs_mmd)
             ex_cal, q_cal_fdc = fdc(q_cal)
@@ -634,7 +719,25 @@ if uploaded_file is not None:
             
             ax.plot(ex_obs, q_obs_fdc, label='Observed')
             ax.plot(ex_cal, q_cal_fdc, color = '#0DB14B', label='Calibrated')
+            ax.fill_between(
+                ex_obs,
+                fdc05,
+                fdc95,
+                color='#0DB14B',
+                alpha=0.25
+            )
             
+            ax.plot(
+                ex_obs,
+                fdc50,
+                color='#0DB14B'
+            )
+            
+            ax.plot(
+                ex_obs,
+                q_obs_fdc,
+                color='black'
+            )
             ax.set_yscale('log')
             
             ax.set_xlabel('Exceedance (%)')
@@ -645,6 +748,9 @@ if uploaded_file is not None:
             st.subheader('Flow Duration Curve')
             
             st.pyplot(fig_fdc)
+
+        st.write( behavioural_df[  ['X1', 'X2', 'X3', 'X4', 'Score'] ].describe()
+)
     
     except Exception as e:
     
