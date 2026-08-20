@@ -424,9 +424,27 @@ if uploaded_file is not None:
             best_params = cal_results['best_params']
             best_score = cal_results['best_score']
             behavioural_df = cal_results['behavioural_df']
+            #st.write(f'Original behavioural models: {len(behavioural_df)}')
+
+            max_behavioural_models = 100
+
+            behavioural_df = behavioural_df.head(
+                max_behavioural_models
+            )
+            st.write( f'Models used in ensemble: {len(behavioural_df)}')
+            
+            if len(behavioural_df) == 0:
+            
+                st.error(
+                    'No behavioural models met the acceptance criterion.'
+                )
+            
+                st.stop()
 
             st.write('Reached calibration results')
-            st.write(f'Behavioural models retained: {len(behavioural_df)}')
+            st.write(
+                f'Behavioural Models Retained (maximum 100): {len(behavioural_df)}'
+            )
             
             progress = st.progress(0)
             n_models = len(behavioural_df)
@@ -448,14 +466,21 @@ if uploaded_file is not None:
                     pet,
                     params
                 )
-            
+
+                
                 ensemble.append(q_sim)
-                progress.progress(
+                if n_models > 0:
+                
+                    progress.progress(
+                        (i + 1) / n_models
+                    )
                 
                 (i + 1) / n_models
                 
                 )            
             ensemble = np.array(ensemble)
+            st.write(f'Ensemble shape: {ensemble.shape}')
+            progress.empty()
             
             # retain selected percentiles for plotting and outputs
             q05 = np.nanpercentile(
@@ -475,6 +500,8 @@ if uploaded_file is not None:
                 95,
                 axis=0
             )
+            st.write( 'Finished percentile calculations')
+
             
             st.write(f'Behavioural Models Retained: {len(behavioural_df)}')
             st.write(f'Best {objective}: {best_score:.3f}')
@@ -626,12 +653,12 @@ if uploaded_file is not None:
             ax.set_ylabel('Log Residual')
             ax.set_xlabel('Date')
             
-            st.subheader('Calibrated Residuals')
+            st.subheader('Behavioural Median Residuals')
             
             st.pyplot(fig_cal_res)
             
             # calibrated scatter plot
-            st.subheader('Calibrated Scatter Plot')
+            st.subheader('Best Model Scatter Plot')
             
             mask = (
                 np.isfinite(q_obs_mmd)
