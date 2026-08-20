@@ -525,14 +525,14 @@ if uploaded_file is not None:
             with col1:
 
                 st.metric(
-                    'Calibrated KGE',
+                    'Best model KGE',
                     f'{kge_cal:.3f}'
                 )
 
             with col2:
 
                 st.metric(
-                    'Calibrated NSE',
+                    'Best model NSE',
                     f'{nse_cal:.3f}'
                 )
 
@@ -591,7 +591,7 @@ if uploaded_file is not None:
             cal_log_residuals = (
                 np.log(q_obs_mmd + eps)
                 -
-                np.log(q_cal + eps)
+                np.log(q50 + eps)
             )
             
             fig_cal_res = plt.figure(figsize=(17/2.54, 6/2.54))
@@ -683,9 +683,11 @@ if uploaded_file is not None:
 
             fdc_ensemble = []
                 
+            obs_mask = np.isfinite(q_obs_mmd)
+            
             for sim in ensemble:
             
-                _, q_fdc = fdc(sim)
+                _, q_fdc = fdc(sim[obs_mask])
             
                 fdc_ensemble.append(q_fdc)
 
@@ -746,6 +748,14 @@ if uploaded_file is not None:
             st.subheader('Flow Duration Curve')
             
             st.pyplot(fig_fdc)
+
+            st.subheader('Behavioural Parameter Correlation Matrix')
+            
+            st.dataframe(
+                behavioural_df[
+                    ['X1', 'X2', 'X3', 'X4', 'Score']
+                ].corr()
+            )
     
     except Exception as e:
     
