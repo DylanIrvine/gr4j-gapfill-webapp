@@ -400,9 +400,9 @@ if uploaded_file is not None:
             'Calibrate GR4J'
         )
 
-        progress = st.progress(0)
+        #progress = st.progress(0)
         
-        n_models = len(behavioural_df)
+        #n_models = len(behavioural_df)
         
         if run_calibration:
 
@@ -425,6 +425,9 @@ if uploaded_file is not None:
             best_score = cal_results['best_score']
             behavioural_df = cal_results['behavioural_df']
 
+            progress = st.progress(0)
+            n_models = len(behavioural_df)
+            
             # for the ensemble of retained results
             ensemble = []
             
@@ -444,7 +447,11 @@ if uploaded_file is not None:
                 )
             
                 ensemble.append(q_sim)
-            
+                progress.progress(
+                
+                (i + 1) / n_models
+                
+                )            
             ensemble = np.array(ensemble)
             
             # retain selected percentiles for plotting and outputs
