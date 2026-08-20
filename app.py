@@ -465,9 +465,6 @@ if uploaded_file is not None:
             st.write(f'Behavioural Models Retained: {len(behavioural_df)}')
             st.write(f'Best {objective}: {best_score:.3f}')
             st.dataframe(behavioural_df.head(20))
-
-            
-            st.dataframe(behavioural_df.head(20))
             
             st.subheader('Behavioural Parameter Summary')
             
@@ -719,7 +716,7 @@ if uploaded_file is not None:
             ax = fig_fdc.add_axes([0.15, 0.15, 0.75, 0.75])
             
             ax.plot(ex_obs, q_obs_fdc, label='Observed')
-            ax.plot(ex_cal, q_cal_fdc, color = '#0DB14B', label='Calibrated')
+            #ax.plot(ex_cal, q_cal_fdc, color = '#0DB14B', label='Calibrated')
             ax.fill_between(
                 ex_obs,
                 fdc05,
@@ -749,9 +746,6 @@ if uploaded_file is not None:
             st.subheader('Flow Duration Curve')
             
             st.pyplot(fig_fdc)
-
-        st.write( behavioural_df[  ['X1', 'X2', 'X3', 'X4', 'Score'] ].describe()
-)
     
     except Exception as e:
     
