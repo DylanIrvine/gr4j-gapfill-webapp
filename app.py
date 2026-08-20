@@ -695,7 +695,57 @@ if uploaded_file is not None:
             
             st.pyplot(fig_cal_scatter)
             
+            # behavioural parameter distributions
             
+            st.subheader(
+                'Behavioural Parameter Distributions'
+            )
+
+            for i, (param, colour) in enumerate(
+                zip(params, colours)
+            ):
+            
+                ax = fig_hist.add_subplot(
+                    2,
+                    2,
+                    i + 1
+                )
+            
+                ax.hist(
+                    behavioural_df[param],
+                    bins=20,
+                    color=colour,
+                    edgecolor='black',
+                    linewidth=0.5
+                )
+            
+                ax.axvline(
+                    best_lookup[param],
+                    color='black',
+                    linestyle='--',
+                    linewidth=1.5,
+                    label='Best model'
+                )
+            
+                ax.set_title(param)
+                ax.set_ylabel('Count')
+            
+                if param == 'X1':
+                    ax.set_xlabel('Production Store Capacity (mm)')
+            
+                elif param == 'X2':
+                    ax.set_xlabel('Groundwater Exchange (mm/d)')
+            
+                elif param == 'X3':
+                    ax.set_xlabel('Routing Store Capacity (mm)')
+            
+                elif param == 'X4':
+                    ax.set_xlabel('Time Base (days)')
+            
+                ax.legend(
+                    fontsize=7,
+                    frameon=False
+                )          
             
             # calibrated flow duration curve
             def fdc(q):
