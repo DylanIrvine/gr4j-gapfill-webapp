@@ -10,7 +10,7 @@ from core.metrics import nse
 
 #%%  List to store suitable models
 behavioural_archive = []
-MAX_BEHAVIOURAL_MODELS = 100
+MAX_BEHAVIOURAL_MODELS = 200
 
 #%%
 def objective_function(
@@ -189,19 +189,29 @@ def calibrate_gr4j(
     archive_df = archive_df.sort_values('Score',  ascending=False)                
 
     behavioural_df = archive_df[
-        archive_df['Score'] >= best_score - behavioural_delta
-    ]
-
-    behavioural_df = behavioural_df.sort_values(
-        'Score',
-        ascending=False
-    )
-
-
-
-    behavioural_df = behavioural_df.head(
-        MAX_BEHAVIOURAL_MODELS
-    )
+            archive_df['Score'] >= best_score - behavioural_delta
+        ]
+        
+        behavioural_df = behavioural_df.sort_values(
+            'Score',
+            ascending=False
+        )
+        
+        # Round parameters to remove numerical duplicates
+        behavioural_df['X1'] = behavioural_df['X1'].round(1)
+        behavioural_df['X2'] = behavioural_df['X2'].round(2)
+        behavioural_df['X3'] = behavioural_df['X3'].round(1)
+        behavioural_df['X4'] = behavioural_df['X4'].round(2)
+        
+        # Remove duplicate parameter combinations
+        behavioural_df = behavioural_df.drop_duplicates(
+            subset=['X1', 'X2', 'X3', 'X4']
+        )
+        
+        
+        behavioural_df = behavioural_df.head(
+            MAX_BEHAVIOURAL_MODELS
+        ) 
                 
     best_params = {
 
