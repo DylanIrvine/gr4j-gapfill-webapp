@@ -29,7 +29,8 @@ def section_break():
 st.title('GR4J Gap Filling Tool')
 st.write('Dylan Irvine, Charles Darwin University.\n')
 st.write('The GR4J model (Modèle du Génie Rural à 4 paramètres Journalier) is a simple, lumped conceptual rainfall-runoff model. It simulates daily streamflow using only catchment-averaged daily precipitation and potential evapotranspiration data. The model was originally published Perrin et al. (2003).\n\n The  gr4j-gapfill-webapp provides users with an online version of the tool that can be applied with no coding required. Simply upload your file, following the workflow, and you will have calibrated models and/or gap-filled hydrographs.\n\n Original reference \n\nPerrin, C., Michel, C., and Andréassian, V. "Improvement of a parsimonious model for streamflow simulation." Journal of Hydrology 279, no. 1 (2003): 275-289.')
-    
+
+#===============================================================================================================
 st.subheader('1. Upload Data')
 
 st.write('Upload a csv containing date, rainfall, PET, and streamflow. Dates must be in dd/mm/yyyy format. Rain and PET must be in mm/d, but flow can be m3/s, or ML/d, or mm/d.')
@@ -143,6 +144,7 @@ if uploaded_file is not None:
             f'Record ends: {dates.max()}'
         )
 
+#===============================================================================================================
         section_break()
         st.subheader('2. Manual GR4J Simulation')
         
@@ -353,7 +355,8 @@ if uploaded_file is not None:
             st.warning(
                 'Less than two years of observed flow available.'
             )
-            
+
+#===============================================================================================================        
         section_break()
         st.subheader('3. Model Calibration')
         st.write('This section calibrates X1, X2, X3 and X4, producing a suite of outputs. Choose from either the Kling-Gupta Efficiency (KGE) or Nash-Sutcliffe Efficiency (NSE) as the objective function. ')
@@ -399,10 +402,6 @@ if uploaded_file is not None:
         run_calibration = st.button(
             'Calibrate GR4J'
         )
-
-        #progress = st.progress(0)
-        
-        #n_models = len(behavioural_df)
         
         if run_calibration:
 
@@ -601,7 +600,6 @@ if uploaded_file is not None:
                 label='Behavioural median'
             )
             
-
             ax.legend()
 
             ax.set_ylabel(
@@ -757,8 +755,9 @@ if uploaded_file is not None:
                 ax.legend(
                     fontsize=7,
                     frameon=False
-                )          
-            
+                )         
+                
+            st.pyplot(fig_cal_scatter)
             # calibrated flow duration curve
             def fdc(q):
             
