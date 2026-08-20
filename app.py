@@ -787,6 +787,11 @@ if uploaded_file is not None:
                     ['X1', 'X2', 'X3', 'X4', 'Score']
                 ].corr()
             )
+
+            st.write(
+                np.nanmin(fdc95 - fdc05),
+                np.nanmax(fdc95 - fdc05)
+            )
     
     except Exception as e:
     
