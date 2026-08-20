@@ -425,6 +425,9 @@ if uploaded_file is not None:
             best_score = cal_results['best_score']
             behavioural_df = cal_results['behavioural_df']
 
+            st.write('Reached calibration results')
+            st.write(f'Behavioural models retained: {len(behavioural_df)}')
+            
             progress = st.progress(0)
             n_models = len(behavioural_df)
             
