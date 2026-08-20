@@ -187,8 +187,20 @@ def calibrate_gr4j(
         
     archive_df = archive_df.sort_values('Score',  ascending=False)                
 
-    behavioural_df = archive_df[archive_df['Score']>=best_score - behavioural_delta]
-    behavioural_df = behavioural_df.sort_values('Score',ascending=False)
+    behavioural_df = archive_df[
+        archive_df['Score'] >= best_score - behavioural_delta
+    ]
+
+    behavioural_df = behavioural_df.sort_values(
+        'Score',
+        ascending=False
+    )
+
+    max_behavioural_models = 100
+
+    behavioural_df = behavioural_df.head(
+        max_behavioural_models
+    )
                 
     best_params = {
 
