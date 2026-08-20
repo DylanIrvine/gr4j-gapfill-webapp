@@ -477,8 +477,7 @@ if uploaded_file is not None:
                     )
                 
                 (i + 1) / n_models
-                
-                )            
+                           
             ensemble = np.array(ensemble)
             st.write(f'Ensemble shape: {ensemble.shape}')
             progress.empty()
