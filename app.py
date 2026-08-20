@@ -466,8 +466,16 @@ if uploaded_file is not None:
             st.write(f'Best {objective}: {best_score:.3f}')
             st.dataframe(behavioural_df.head(20))
 
-            st.write( f'Behavioural Models Retained: {len(behavioural_df)}')
-            st.write( f'Best {objective}: {best_score:.3f}')
+            
+            st.dataframe(behavioural_df.head(20))
+            
+            st.subheader('Behavioural Parameter Summary')
+            
+            st.dataframe(
+                behavioural_df[
+                    ['X1', 'X2', 'X3', 'X4', 'Score']
+                ].describe()
+            )
 
             st.subheader(
                 'Calibration Results'
@@ -565,13 +573,6 @@ if uploaded_file is not None:
                 label='Behavioural median'
             )
             
-            ax.plot(
-                dates,
-                q_obs_mmd,
-                color='black',
-                alpha=0.6,
-                label='Observed'
-            )
 
             ax.legend()
 
