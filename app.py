@@ -757,7 +757,7 @@ if uploaded_file is not None:
                     frameon=False
                 )         
                 
-            st.pyplot(fig_cal_scatter)
+            st.pyplot(fig_hist)
             # calibrated flow duration curve
             def fdc(q):
             
