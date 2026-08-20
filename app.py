@@ -27,7 +27,7 @@ def section_break():
 
 #%% Main code
 st.title('GR4J Gap Filling Tool')
-
+st.write('Dylan Irvine, Charles Darwin University.\n')
 st.write('The GR4J model (Modèle du Génie Rural à 4 paramètres Journalier) is a simple, lumped conceptual rainfall-runoff model. It simulates daily streamflow using only catchment-averaged daily precipitation and potential evapotranspiration data. The model was originally published Perrin et al. (2003).\n\n The  gr4j-gapfill-webapp provides users with an online version of the tool that can be applied with no coding required. Simply upload your file, following the workflow, and you will have calibrated models and/or gap-filled hydrographs.\n\n Original reference \n\nPerrin, C., Michel, C., and Andréassian, V. "Improvement of a parsimonious model for streamflow simulation." Journal of Hydrology 279, no. 1 (2003): 275-289.')
     
 st.subheader('1. Upload Data')
@@ -159,7 +159,7 @@ if uploaded_file is not None:
 
         x2 = st.number_input(
             'X2 Groundwater Exchange (mm/d)',
-            min_value=-20.0,
+            min_value=-25.0,
             max_value=5.0,
             value=0.0
         )
@@ -437,7 +437,7 @@ if uploaded_file is not None:
                 st.stop()
 
             st.write(
-                f'Behavioural Models Retained (maximum 100): {len(behavioural_df)}'
+                f'Behavioural Models Retained (maximum 200): {len(behavioural_df)}'
             )
             
             progress = st.progress(0)
