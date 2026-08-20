@@ -426,11 +426,6 @@ if uploaded_file is not None:
             behavioural_df = cal_results['behavioural_df']
             #st.write(f'Original behavioural models: {len(behavioural_df)}')
 
-            max_behavioural_models = 100
-
-            behavioural_df = behavioural_df.head(
-                max_behavioural_models
-            )
             st.write( f'Models used in ensemble: {len(behavioural_df)}')
             
             if len(behavioural_df) == 0:
@@ -441,7 +436,6 @@ if uploaded_file is not None:
             
                 st.stop()
 
-            st.write('Reached calibration results')
             st.write(
                 f'Behavioural Models Retained (maximum 100): {len(behavioural_df)}'
             )
@@ -474,11 +468,10 @@ if uploaded_file is not None:
                     progress.progress(
                         (i + 1) / n_models
                     )
-                
-                (i + 1) / n_models
+
                            
             ensemble = np.array(ensemble)
-            st.write(f'Ensemble shape: {ensemble.shape}')
+
             progress.empty()
             
             # retain selected percentiles for plotting and outputs
@@ -499,9 +492,7 @@ if uploaded_file is not None:
                 95,
                 axis=0
             )
-            st.write( 'Finished percentile calculations')
-
-            
+       
             st.write(f'Behavioural Models Retained: {len(behavioural_df)}')
             st.write(f'Best {objective}: {best_score:.3f}')
             st.dataframe(behavioural_df.head(20))
