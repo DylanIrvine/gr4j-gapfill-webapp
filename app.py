@@ -431,7 +431,7 @@ if uploaded_file is not None:
             # for the ensemble of retained results
             ensemble = []
             
-            for _, row in behavioural_df.iterrows():
+            for i, (_, row) in enumerate(behavioural_df.iterrows()):
             
                 params = {
                     'X1': row['X1'],
