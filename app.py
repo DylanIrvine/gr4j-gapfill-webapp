@@ -236,7 +236,6 @@ if uploaded_file is not None:
             dates,
             q_obs_mmd,
             color='black',
-            alpha=0.6,
             linewidth=1,
             label='Observed'
         )
@@ -246,7 +245,7 @@ if uploaded_file is not None:
             q_sim_uploaded,
             color='royalblue',
             alpha=0.6,
-            linewidth=1,
+            linewidth=2,
             label='GR4J'
         )
         
@@ -303,7 +302,7 @@ if uploaded_file is not None:
         
         st.pyplot(fig_res)
 
-        st.subheader('Observed vs Simulated Scatter - using exploration parameter')
+        st.subheader('Observed vs Simulated Scatter - using exploration parameters')
         
         mask = (
             np.isfinite(q_obs_mmd)
@@ -357,7 +356,7 @@ if uploaded_file is not None:
             
         section_break()
         st.subheader('3. Model Calibration')
-        st.write('This section calibrates X1, X2, X3 and X4, producing a suite of outputs. Set your objective functionn and the number of warm up days below.')
+        st.write('This section calibrates X1, X2, X3 and X4, producing a suite of outputs. Choose from either the Kling-Gupta Efficiency (KGE) or Nash-Sutcliffe Efficiency (NSE) as the objective function. ')
 
         objective = st.selectbox(
             'Objective Function',
@@ -372,7 +371,7 @@ if uploaded_file is not None:
             value=730
         )
 
-        st.write( 'Models within this distance of the best objective score are retained as behavioural models.')
+        st.write( 'Models within this distance of the best objective score are retained as behavioural models. The models within this delta value will be retained for uncertainty analyses (up to 100 model configurations).')
         behavioural_delta = st.number_input(
             'Behavioural Model Delta',
             value=0.05,
