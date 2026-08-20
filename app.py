@@ -703,6 +703,14 @@ if uploaded_file is not None:
             )
             params = ['X1', 'X2', 'X3', 'X4']
 
+            best_lookup = {
+                'X1': best_params['X1'],
+                'X2': best_params['X2'],
+                'X3': best_params['X3'],
+                'X4': best_params['X4']
+            }
+
+            
             colours = ['#FCB711','#F37021','#CC004C','#6460AA']
             
             for i, (param, colour) in enumerate(
