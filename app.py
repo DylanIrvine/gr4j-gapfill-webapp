@@ -748,27 +748,37 @@ if uploaded_file is not None:
             fig_fdc = plt.figure(figsize=(10/2.54, 8/2.54))
             ax = fig_fdc.add_axes([0.15, 0.15, 0.75, 0.75])
             
-            ax.plot(ex_obs, q_obs_fdc, label='Observed')
             #ax.plot(ex_cal, q_cal_fdc, color = '#0DB14B', label='Calibrated')
             ax.fill_between(
                 ex_obs,
                 fdc05,
                 fdc95,
                 color='#0DB14B',
-                alpha=0.25
+                alpha=0.5,
+                label='5-95% behavioural range',
+                zorder=1
             )
             
             ax.plot(
                 ex_obs,
                 fdc50,
-                color='#0DB14B'
+                color='#0DB14B',
+                linewidth=2,
+                label='Behavioural median',
+                zorder=2
             )
             
             ax.plot(
                 ex_obs,
                 q_obs_fdc,
-                color='black'
+                color='black',
+                linewidth=2,
+                label='Observed',
+                zorder=3
             )
+      
+            ax.plot(ex_obs, fdc_ensemble[0], color='red',alpha=0.5, label='First ensemble member')
+            
             ax.set_yscale('log')
             
             ax.set_xlabel('Exceedance (%)')
