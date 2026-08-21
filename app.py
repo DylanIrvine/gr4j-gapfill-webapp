@@ -377,7 +377,7 @@ if uploaded_file is not None:
             value=730
         )
 
-        st.write( 'Models within this distance of the best objective score are retained as behavioural models. The models within this delta value will be retained for uncertainty analyses (up to 100 model configurations).')
+        st.write( 'Models within this distance of the best objective score are retained as behavioural models. The models within this delta value will be retained for uncertainty analyses (up to 200 model configurations).')
         behavioural_delta = st.number_input(
             'Behavioural Model Delta',
             value=0.05,
@@ -437,10 +437,6 @@ if uploaded_file is not None:
                 )
             
                 st.stop()
-
-            st.write(
-                f'Behavioural Models Retained (maximum 200): {len(behavioural_df)}'
-            )
             
             progress = st.progress(0)
             n_models = len(behavioural_df)
@@ -788,7 +784,7 @@ if uploaded_file is not None:
             st.pyplot(fig_cal_scatter)
 #=================================================== histograms            
             # behavioural parameter distributions
-            fig_hist = plt.figure(figsize=(17/2.54, 10/2.54))
+            fig_hist = plt.figure(figsize=(17/2.54, 12/2.54))
             
             st.subheader(
                 'Behavioural Parameter Distributions'
@@ -828,7 +824,7 @@ if uploaded_file is not None:
                     color='black',
                     linestyle='--',
                     linewidth=1.5,
-                    label='Best model'
+                    label=f'Best = {best_lookup.2f}'
                 )
             
                 ax.set_title(param)
@@ -849,23 +845,23 @@ if uploaded_file is not None:
                 ax.legend(
                     fontsize=7,
                     frameon=False
-                )         
+                )    
                 
+             fig_hist.subplots_adjust(
+                hspace=0.35,
+                wspace=0.20
+            )               
             st.pyplot(fig_hist)
 
 #=================================================== Correlation matrix  
-            st.subheader('Behavioural Parameter Correlation Matrix')
-            
-            st.dataframe(
-                behavioural_df[
-                    ['X1', 'X2', 'X3', 'X4', 'Score']
-                ].corr()
-            )
-
-            st.write(
-                np.nanmin(fdc95 - fdc05),
-                np.nanmax(fdc95 - fdc05)
-            )
+            with st.expander('Advanced Parameter Diagnostics'):
+                st.subheader('Behavioural Parameter Correlation Matrix')
+                
+                st.dataframe(
+                    behavioural_df[
+                        ['X1', 'X2', 'X3', 'X4', 'Score']
+                    ].corr()
+                )
     
     except Exception as e:
     
