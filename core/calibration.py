@@ -49,7 +49,7 @@ def _objective_function(params, precip, pet, q_obs, warmup_days, metric,
 # %%
 def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE',
                  transform_kind='none', maxiter=25, popsize=12,
-                 behavioural_delta=0.05, seed=1, progress_callback=None):
+                 behavioural_delta=0.05, seed=1, bounds=None, progress_callback=None):
     """Calibrate a GR model and return the best parameter set plus an archive.
 
     Parameters
@@ -66,12 +66,17 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
         again as much per generation as GR4J.
     behavioural_delta : models scoring within this distance of the best are retained
     seed : int, fixes the differential evolution random state for reproducibility
+    bounds : optional dict of parameter name to (lower, upper). Defaults to
+        PARAM_BOUNDS. Widening a bound gives the optimiser more room to
+        compensate for data problems; narrowing one suppresses the bound-hit
+        warning rather than fixing whatever caused it. Report a constrained run
+        alongside the unconstrained one rather than in place of it.
     progress_callback : optional callable, called once per generation as
         callback(params_dict, convergence)
 
     Returns
     -------
-    dict with keys best_params, best_score, behavioural_df, model, epsilon
+    dict with keys best_params, best_score, behavioural_df, model, epsilon, bounds
 
     Note on interpretation
     ---------------------
@@ -88,7 +93,26 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
     q_obs = np.asarray(q_obs, dtype=float)
 
     names = PARAM_NAMES[model]
-    bounds = [PARAM_BOUNDS[name] for name in names]
+
+    if bounds is None:
+        bounds = {name: PARAM_BOUNDS[name] for name in names}
+
+    missing = [name for name in names if name not in bounds]
+    if missing:
+        raise ValueError(f'{model} needs bounds for {missing}.')
+
+    bounds = {name: (float(bounds[name][0]), float(bounds[name][1])) for name in names}
+
+    for name in names:
+        lo, hi = bounds[name]
+        if not (np.isfinite(lo) and np.isfinite(hi)) or lo >= hi:
+            raise ValueError(f'Bounds for {name} must satisfy lower < upper, got {lo} to {hi}.')
+
+    if model == 'GR6J' and bounds['X6'][0] <= 0.0:
+        raise ValueError('The lower bound on X6 must be strictly positive, it divides the '
+                         'store level.')
+
+    bounds_list = [bounds[name] for name in names]
 
     # the transform offset is fixed once from the observations, so every
     # candidate parameter set is scored against exactly the same criterion
@@ -102,7 +126,7 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
 
     result = differential_evolution(
         _objective_function,
-        bounds=bounds,
+        bounds=bounds_list,
         args=(precip, pet, q_obs, warmup_days, metric, transform_kind, epsilon,
               model, names, archive),
         maxiter=maxiter,
@@ -118,7 +142,8 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
     if len(archive) == 0:
         empty = pd.DataFrame(columns=list(names) + ['Score'])
         return {'best_params': best_params, 'best_score': best_score,
-                'behavioural_df': empty, 'model': model, 'epsilon': epsilon}
+                'behavioural_df': empty, 'model': model, 'epsilon': epsilon,
+                'bounds': bounds}
 
     archive_df = pd.DataFrame(archive)
     archive_df = archive_df[np.isfinite(archive_df['Score'])]
@@ -134,7 +159,8 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
     behavioural_df = behavioural_df.head(MAX_BEHAVIOURAL_MODELS).reset_index(drop=True)
 
     return {'best_params': best_params, 'best_score': best_score,
-            'behavioural_df': behavioural_df, 'model': model, 'epsilon': epsilon}
+            'behavioural_df': behavioural_df, 'model': model, 'epsilon': epsilon,
+            'bounds': bounds}
 
 
 # %% backwards compatible alias
