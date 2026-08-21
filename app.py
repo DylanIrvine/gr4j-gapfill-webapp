@@ -6,6 +6,8 @@
 import gc
 import inspect
 import math
+import zipfile
+from datetime import datetime
 from io import BytesIO
 
 import streamlit as st
@@ -14,9 +16,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from core.models import (simulate, MODELS, PARAM_NAMES, PARAM_BOUNDS,
-                         PARAM_LABELS, MODEL_NOTES)
-from core.metrics import (kge, nse, score, criterion_label, METRICS,
-                          TRANSFORMS, TRANSFORM_LABELS)
+                         PARAM_LABELS, PARAM_ROUNDING, MODEL_NOTES)
+from core.metrics import (kge, nse, score, criterion_label, composite_label,
+                          METRICS, TRANSFORMS, TRANSFORM_LABELS, COMPOSITE_TRANSFORMS)
 from core.units import cumecs_to_mmd, mmd_to_cumecs, mld_to_mmd, mmd_to_mld
 from core.calibration import calibrate_gr
 from core.gapfill import (gapfill_p50, gapfill_snapped, gapfill_gaussian_process,
@@ -34,6 +36,7 @@ EPS = 0.01
 C_OBS, C_SIM, C_CAL = 'black', 'royalblue', '#0DB14B'
 C_PARAM = ['#FCB711', '#F37021', '#CC004C', '#6460AA', '#0DB14B', '#2BA9E0']
 MAX_EXPORT_MODELS = 30
+MAX_HISTORY = 20
 LONG_FORCING_GAP = 5
 CACHE_TTL = 3600
 GR6J_MIN_WARMUP = 1095
@@ -42,7 +45,7 @@ GR6J_MIN_WARMUP = 1095
 # the script in place when new source is deployed, so stored results can outlive
 # the code that wrote them. Increment whenever a key is added, renamed or
 # removed, and stale results are discarded rather than raising a KeyError.
-CAL_SCHEMA = 4
+CAL_SCHEMA = 5
 
 FLOW_UNITS = ['m3/s', 'ML/d', 'mm/d']
 UNIT_SUFFIX = {'m3/s': 'm3s', 'ML/d': 'MLd', 'mm/d': 'mmd'}
@@ -61,7 +64,8 @@ GAP_METHODS = ['Behavioural Median', 'Endpoint Snapped Residuals',
 # something actionable.
 
 REQUIRED_ARGUMENTS = {
-    'core/calibration.py': (calibrate_gr, ['model', 'transform_kind', 'bounds', 'progress_callback']),
+    'core/calibration.py': (calibrate_gr, ['model', 'transform_kind', 'composite_weight',
+                                          'bounds', 'seed', 'progress_callback']),
     'core/models.py': (simulate, ['model']),
     'core/metrics.py': (score, ['metric', 'transform_kind']),
 }
@@ -108,6 +112,11 @@ def unit_factor(units, area_km2):
     return float(to_mmd(np.array([1.0]), units, area_km2)[0])
 
 
+# %% figure capture
+# Rebuilt on every script run. Populated by show().
+FIGURES = {}
+
+
 # %% plotting helpers
 def section_break():
     st.markdown('---')
@@ -118,8 +127,20 @@ def new_fig(w_cm, h_cm, rect):
     return fig, fig.add_axes(rect)
 
 
-def show(fig):
-    """Render a figure then close it, so repeated reruns do not leak memory."""
+def show(fig, name=None):
+    """Render a figure, keep a PNG copy for the download package, then close it.
+
+    Streamlit gives dataframes a download button but not figures, so the PNG
+    bytes are captured here as each figure is drawn and bundled into the results
+    zip in section 6. FIGURES is a plain module-level dict, which Streamlit
+    resets on every script run, so it always holds the figures currently on
+    screen rather than accumulating stale ones.
+    """
+    if name is not None:
+        png = BytesIO()
+        fig.savefig(png, format='png', dpi=200, bbox_inches='tight', facecolor='white')
+        FIGURES[name] = png.getvalue()
+
     st.pyplot(fig)
     plt.close(fig)
 
@@ -163,6 +184,56 @@ def plot_scatter(x, y, colour, xlabel, ylabel):
     ax.set_yscale('symlog')
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
+    return fig
+
+
+def plot_parameter_pairs(behavioural_df, names, best_params):
+    """Lower-triangle scatter matrix of the behavioural set, coloured by score.
+
+    A histogram is a marginal projection. If the behavioural members lie along a
+    curved ridge in parameter space, projecting that ridge onto one axis piles
+    up density where the ridge runs parallel to the axis and thins it elsewhere,
+    producing apparent modes that correspond to no distinct solution. This plot
+    shows the joint structure, so two genuinely separate optima can be told
+    apart from one bent ridge.
+    """
+    n = len(names)
+    if n < 2 or len(behavioural_df) < 2:
+        return None
+
+    size = min(3.8 * (n - 1), 18.0)
+    fig = plt.figure(figsize=(size / 2.54, size / 2.54))
+    scores = behavioural_df['Score'].to_numpy()
+    points = None
+
+    for i in range(1, n):
+        for j in range(i):
+            ax = fig.add_subplot(n - 1, n - 1, (i - 1) * (n - 1) + j + 1)
+            points = ax.scatter(behavioural_df[names[j]], behavioural_df[names[i]],
+                                c=scores, cmap='viridis', s=12, lw=0, alpha=0.85)
+            ax.plot(best_params[names[j]], best_params[names[i]], 'x',
+                    color='black', markersize=8, markeredgewidth=1.5)
+            ax.tick_params(labelsize=6)
+
+            if j == 0:
+                ax.set_ylabel(names[i], fontsize=8)
+            else:
+                ax.set_yticklabels([])
+            if i == n - 1:
+                ax.set_xlabel(names[j], fontsize=8)
+                ax.tick_params(axis='x', labelrotation=45)
+            else:
+                ax.set_xticklabels([])
+
+    fig.subplots_adjust(left=0.13, bottom=0.13, right=0.97, top=0.97,
+                        hspace=0.12, wspace=0.12)
+
+    if n >= 3 and points is not None:
+        cax = fig.add_axes([0.60, 0.62, 0.02, 0.30])
+        bar = fig.colorbar(points, cax=cax)
+        bar.set_label('Score', fontsize=8)
+        bar.ax.tick_params(labelsize=6)
+
     return fig
 
 
@@ -240,6 +311,17 @@ def build_workbook(output_df, behavioural_df, ensemble_df, metadata_df):
         return buffer.getvalue()
 
 
+def build_results_zip(workbook_bytes, workbook_name, figures, readme_text):
+    """Bundle the workbook, every figure on screen, and a contents note."""
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(workbook_name, workbook_bytes)
+        archive.writestr('README.txt', readme_text)
+        for name, png in figures.items():
+            archive.writestr(f'figures/{name}.png', png)
+    return buffer.getvalue()
+
+
 # %% export table builders
 def build_output_df(dates, series_mmd, units, area_km2, include_mmd, include_native):
     data = {'Date': dates}
@@ -277,6 +359,7 @@ def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, she
     items = [
         ('Hydrological model', model),
         ('Calibration criterion', cal['criterion']),
+        ('Random seed', str(cal['seed'])),
         ('Best criterion value', f"{cal['best_score']:.4f}"),
         ('Transform offset epsilon (mm/d)', f"{cal['epsilon']:.6g}"),
         ('Warm-up days excluded', str(cal['warmup_days'])),
@@ -519,13 +602,14 @@ col2.metric('NSE', f'{nse(q_obs_mmd, q_sim_manual):.3f}')
 col3.metric('KGE(1/Q)', f'{score(q_obs_mmd, q_sim_manual, "KGE", "inverse"):.3f}')
 
 fig, _ = plot_hydrograph(dates, q_obs_mmd, [(q_sim_manual, C_SIM, model, 2)])
-show(fig)
+show(fig, 'exploration_hydrograph')
 
 st.subheader('Residuals - using exploration parameters')
-show(plot_log_residuals(dates, q_obs_mmd, q_sim_manual, C_SIM))
+show(plot_log_residuals(dates, q_obs_mmd, q_sim_manual, C_SIM), 'exploration_residuals')
 
 st.subheader('Observed vs Simulated Scatter - using exploration parameters')
-show(plot_scatter(q_obs_mmd, q_sim_manual, C_SIM, 'Observed (mm/d)', 'Simulated (mm/d)'))
+show(plot_scatter(q_obs_mmd, q_sim_manual, C_SIM, 'Observed (mm/d)', 'Simulated (mm/d)'),
+     'exploration_scatter')
 
 # %% 4. calibration
 section_break()
@@ -538,15 +622,32 @@ st.write('The objective function has two parts: the efficiency criterion, and th
 
 col1, col2 = st.columns(2)
 metric = col1.selectbox('Efficiency Criterion', METRICS)
-transform_kind = col2.selectbox('Flow Transformation', TRANSFORMS,
-                                format_func=lambda k: TRANSFORM_LABELS[k])
+criterion_type = col2.selectbox('Criterion Type', ['Single transformation', 'Composite'])
 
-criterion = criterion_label(metric, transform_kind)
-st.caption(f'Calibration will maximise {criterion}. Values are not comparable across '
-           'transformations, so do not read a higher number under one transform as a better model '
-           'than a lower number under another.')
+composite_weight = None
 
-if model == 'GR6J' and transform_kind == 'none':
+if criterion_type == 'Single transformation':
+    transform_kind = st.selectbox('Flow Transformation', TRANSFORMS,
+                                  format_func=lambda k: TRANSFORM_LABELS[k])
+    criterion = criterion_label(metric, transform_kind)
+    st.caption(f'Calibration will maximise {criterion}. Values are not comparable across '
+               'transformations, so do not read a higher number under one transform as a better '
+               'model than a lower number under another.')
+else:
+    transform_kind = 'none'
+    composite_weight = st.slider(
+        f'Weight on {criterion_label(metric, COMPOSITE_TRANSFORMS[0])}',
+        min_value=0.0, max_value=1.0, value=0.5, step=0.05,
+        help='The remainder goes to the logarithmic component. 0.5 is a reasonable default; '
+             'sweeping the weight traces the trade-off between high-flow and low-flow fit.')
+    criterion = composite_label(metric, composite_weight)
+    st.caption(f'Calibration will maximise {criterion}. This asks the optimiser to perform at '
+               'both ends of the hydrograph rather than trading one for the other. It is a '
+               'pragmatic calibration target, not a likelihood, so describe it that way in any '
+               'write-up. Sweeping the weight from 0 to 1 and plotting the resulting flow '
+               'duration curves traces the trade-off explicitly.')
+
+if model == 'GR6J' and criterion_type == 'Single transformation' and transform_kind == 'none':
     st.warning('GR6J adds X6 specifically to control low flows, but an untransformed criterion is '
                'almost entirely determined by peak flows, so X6 will be poorly constrained. '
                'Consider the logarithmic or inverse transformation.')
@@ -566,6 +667,14 @@ behavioural_delta = st.number_input('Behavioural Model Delta', value=0.05, min_v
 with st.expander('Advanced Calibration Settings'):
     maxiter = int(st.number_input('Maximum Iterations', value=25, min_value=1))
     popsize = int(st.number_input('Population Size', value=12, min_value=1))
+    seed = int(st.number_input('Random Seed', value=1, min_value=0, step=1))
+    st.caption('The seed fixes the differential evolution random state, so a repeated run with '
+               'identical settings reproduces exactly. Changing it and re-running is the check '
+               'for whether an apparent optimum is real: if two seeds land on materially '
+               'different parameters at similar scores, the search has not converged or the '
+               'catchment supports more than one solution. Each run is compared against the '
+               'others in the run history below rather than pooled, since pooling trajectories '
+               'from different seeds gives a set that is neither a sample nor a trajectory.')
     st.caption(f'Differential evolution sizes the population as popsize times the number of '
                f'parameters, so {model} runs {popsize * len(param_names)} members per generation '
                f'against {popsize * 4} for a four-parameter model. Expect GR6J to take around half '
@@ -637,9 +746,11 @@ if st.button('Calibrate', disabled=not bounds_valid):
 
     cal_results = calibrate_gr(precip=rain, pet=pet, q_obs=q_obs_mmd, model=model,
                                warmup_days=warmup_days, metric=metric,
-                               transform_kind=transform_kind, maxiter=maxiter, popsize=popsize,
+                               transform_kind=transform_kind,
+                               composite_weight=composite_weight,
+                               maxiter=maxiter, popsize=popsize,
                                behavioural_delta=behavioural_delta, bounds=param_bounds,
-                               progress_callback=report_progress)
+                               seed=seed, progress_callback=report_progress)
 
     cal_bar.empty()
     behavioural_df = cal_results['behavioural_df']
@@ -674,6 +785,8 @@ if st.button('Calibrate', disabled=not bounds_valid):
         'criterion': criterion,
         'metric': metric,
         'transform_kind': transform_kind,
+        'composite_weight': composite_weight,
+        'seed': int(seed),
         'epsilon': cal_results['epsilon'],
         'bounds': cal_results['bounds'],
         'bounds_customised': bool(custom_bounds),
@@ -696,6 +809,18 @@ if st.button('Calibrate', disabled=not bounds_valid):
         'fdc95': np.nanpercentile(fdc_ensemble, 95, axis=0),
         'ensemble_export': ensemble[:min(MAX_EXPORT_MODELS, len(ensemble))].copy(),
     }
+
+    # A compact record of every run in this session, so seed stability can be
+    # read off a table rather than compared against screenshots. Only scalars
+    # are kept, so the cost is negligible.
+    history = st.session_state.setdefault('history', [])
+    record = {'Run': len(history) + 1, 'Model': model, 'Seed': int(seed),
+              'Criterion': criterion, 'Score': round(cal_results['best_score'], 4),
+              'Behavioural': len(behavioural_df)}
+    record.update({name: round(best_params[name], PARAM_ROUNDING[name])
+                   for name in param_names})
+    history.append(record)
+    st.session_state['history'] = history[-MAX_HISTORY:]
 
     del ensemble, fdc_ensemble
     gc.collect()
@@ -734,6 +859,19 @@ behavioural_df = cal['behavioural_df']
 best_params = cal['best_params']
 q_cal = cal['q_cal']
 q05, q50, q95 = cal['q05'], cal['q50'], cal['q95']
+
+history = st.session_state.get('history', [])
+if len(history) > 1:
+    st.subheader('Run History (this session)')
+    st.write('One row per calibration run in this browser session. Change the seed in Advanced '
+             'Calibration Settings and re-run to test whether an optimum is stable: parameters '
+             'that move materially between seeds at similar scores are not identified by the '
+             'data.')
+    st.dataframe(pd.DataFrame(history), hide_index=True)
+    if st.button('Clear run history'):
+        del st.session_state['history']
+        st.rerun()
+    section_break()
 
 st.write(f"Model: {cal_model}. Behavioural models retained: {cal['n_behavioural']}.")
 st.write(f"Best {cal['criterion']}: {cal['best_score']:.3f}")
@@ -774,10 +912,10 @@ st.subheader('Behavioural Ensemble Hydrograph')
 fig_cal, ax = plot_hydrograph(cal_dates, q_obs, [(q50, C_CAL, 'Behavioural median', 1.5)])
 ax.fill_between(cal_dates, q05, q95, color=C_CAL, alpha=0.25, label='5-95% behavioural range')
 ax.legend()
-show(fig_cal)
+show(fig_cal, 'ensemble_hydrograph')
 
 st.subheader('Behavioural Median Residuals')
-show(plot_log_residuals(cal_dates, q_obs, q50, C_CAL))
+show(plot_log_residuals(cal_dates, q_obs, q50, C_CAL), 'behavioural_median_residuals')
 
 # flow duration curve, from percentiles computed once at calibration time
 ex_obs, q_obs_fdc = fdc(q_obs)
@@ -792,10 +930,11 @@ ax.set_yscale('log')
 ax.set_xlabel('Exceedance (%)')
 ax.set_ylabel('Flow (mm/d)')
 ax.legend()
-show(fig_fdc)
+show(fig_fdc, 'flow_duration_curve')
 
 st.subheader('Best Model Scatter Plot')
-show(plot_scatter(q_obs, q_cal, C_CAL, 'Observed (mm/d)', f'Calibrated {cal_model} (mm/d)'))
+show(plot_scatter(q_obs, q_cal, C_CAL, 'Observed (mm/d)', f'Calibrated {cal_model} (mm/d)'),
+     'best_model_scatter')
 
 # parameter distributions, grid sized to the number of parameters
 st.subheader('Behavioural Parameter Distributions')
@@ -814,11 +953,26 @@ for i, name in enumerate(cal_params):
     ax.legend(fontsize=7, frameon=False)
 
 fig_hist.subplots_adjust(hspace=0.55, wspace=0.20)
-show(fig_hist)
+show(fig_hist, 'parameter_distributions')
 
 with st.expander('Advanced Parameter Diagnostics'):
     st.subheader('Behavioural Parameter Correlation Matrix')
     st.dataframe(behavioural_df[list(cal_params) + ['Score']].corr())
+
+    st.subheader('Behavioural Parameter Pairs')
+    st.write('Each panel is one pair of parameters, coloured by objective score, with the best '
+             'set marked by a cross. Read this before interpreting the histograms above. A '
+             'histogram is a projection onto one axis, so a curved ridge in parameter space can '
+             'produce apparent modes that are not separate solutions. If two clusters here are '
+             'joined by a continuous arc of similar colour, there is one solution and the '
+             'histogram is misleading. If they are genuinely separate, with a gap between them, '
+             'the catchment supports more than one configuration and no amount of extra search '
+             'effort will resolve it. Strong diagonal or curved structure in a panel means those '
+             'two parameters compensate for each other and neither is individually identifiable.')
+
+    fig_pairs = plot_parameter_pairs(behavioural_df, cal_params, best_params)
+    if fig_pairs is not None:
+        show(fig_pairs, 'parameter_pairs')
     st.caption('The behavioural set is drawn from the differential evolution trajectory rather '
                'than a random sample of parameter space, so the spread reflects local sensitivity '
                'around the optimum rather than a formal predictive uncertainty. Adding parameters '
@@ -858,7 +1012,7 @@ ax.plot(cal_dates, q_obs, color=C_OBS, linewidth=1, label='Observed')
 ax.set_xlabel('Date')
 ax.set_ylabel('Flow (mm/d)')
 ax.legend()
-show(fig_gap)
+show(fig_gap, 'gapfilled_hydrograph')
 
 # %% 6. export
 section_break()
@@ -915,12 +1069,59 @@ st.dataframe(pd.DataFrame({'Column': output_df.columns,
 
 workbook_bytes = build_workbook(output_df, behavioural_df, ensemble_df, metadata_df)
 
-st.download_button(
-    label=f'Download Results Workbook ({sheet_units})',
+workbook_name = f'gr_gapfill_{cal_model.lower()}_{file_tag}.xlsx'
+
+readme_lines = [
+    'GR gap filling results package',
+    '',
+    f'Generated: {datetime.now():%Y-%m-%d %H:%M}',
+    f'Model: {cal_model}',
+    f'Calibration criterion: {cal["criterion"]}',
+    f'Best criterion value: {cal["best_score"]:.4f}',
+    f'Random seed: {cal["seed"]}',
+    f'Warm-up days excluded: {cal["warmup_days"]}',
+    f'Behavioural models retained: {cal["n_behavioural"]}',
+    f'Gap filling method: {gap_method}',
+    f'Catchment area: {cal_area:g} km2',
+    f'Input flow units: {cal_units}',
+    f'Workbook units: {sheet_units}',
+    '',
+    'Contents',
+    f'  {workbook_name}',
+    '      four sheets: GapFilled, BehaviouralModels, EnsembleHydrographs, Metadata',
+    '  figures/',
+    '      PNG at 200 dpi of every figure shown in the app',
+    '',
+    'Figures included:',
+]
+readme_lines += [f'  figures/{name}.png' for name in sorted(FIGURES)]
+readme_lines += [
+    '',
+    'Note on the behavioural ensemble: it is drawn from the differential evolution',
+    'trajectory, not from a random sample of parameter space, so the 5 to 95 per cent',
+    'range is a local sensitivity band around the optimum and not a calibrated',
+    'predictive uncertainty.',
+]
+readme_text = '\n'.join(readme_lines)
+
+col_xlsx, col_zip = st.columns(2)
+
+col_xlsx.download_button(
+    label='Workbook only (.xlsx)',
     data=workbook_bytes,
-    file_name=f'gr_gapfill_{cal_model.lower()}_{file_tag}.xlsx',
+    file_name=workbook_name,
     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     key='download_workbook',
+    use_container_width=True,
+)
+
+col_zip.download_button(
+    label=f'Everything, including {len(FIGURES)} figures (.zip)',
+    data=build_results_zip(workbook_bytes, workbook_name, FIGURES, readme_text),
+    file_name=f'gr_gapfill_{cal_model.lower()}_{file_tag}.zip',
+    mime='application/zip',
+    key='download_package',
+    use_container_width=True,
 )
 
 st.caption(f'Four sheets: GapFilled in {sheet_units}, BehaviouralModels holding the '
