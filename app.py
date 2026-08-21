@@ -235,7 +235,7 @@ def plot_parameter_pairs(behavioural_df, names, best_params):
                         hspace=0.12, wspace=0.12)
 
     if n >= 3 and points is not None:
-        cax = fig.add_axes([0.79, 0.52, 0.02, 0.45])
+        cax = fig.add_axes([0.86, 0.42, 0.02, 0.55])
         bar = fig.colorbar(points, cax=cax)
         bar.set_label('Score', fontsize=8)
         bar.ax.tick_params(labelsize=6)
