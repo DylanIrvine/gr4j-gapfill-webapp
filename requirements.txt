@@ -5,3 +5,4 @@ matplotlib
 scipy
 reportlab
 openpyxl
+scikit-learn
