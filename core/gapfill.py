@@ -14,8 +14,8 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel
 
 # %% Gaussian process configuration
-# The exact GP solve is O(n^3) in the number of training points, so a global fit
-# on a multi-decade daily record is not tractable. Two things make it tractable
+# The exact GP solve is O(n^3) in time and O(n^2) in memory, so a global fit on
+# a multi-decade daily record is not tractable. Two things make it tractable
 # without changing the method:
 #
 #   1. Hyperparameters are fitted once, on a bounded sample made of contiguous
@@ -26,13 +26,18 @@ from sklearn.gaussian_process.kernels import RBF, WhiteKernel
 #      about 3e-4, so points beyond the window carry no usable information and
 #      the windowed posterior matches the full-record posterior to well within
 #      the residual noise.
+#
+# WINDOW_MAX_POINTS caps the per-solve kernel matrix. At 1500 points that is
+# about 18 MB per copy, and scikit-learn holds several during the Cholesky, so
+# roughly 50 to 60 MB transient. Raising it grows that quadratically, which
+# matters on a memory-limited container.
 
 HYPER_MAX_POINTS = 1000       # cap on training points for the hyperparameter fit
 HYPER_BLOCK_DAYS = 250        # length of each contiguous block in that sample
 WINDOW_LENGTH_SCALES = 4.0    # window half-width, in fitted length scales
 WINDOW_MIN_DAYS = 120         # floor on window half-width
 WINDOW_MAX_DAYS = 1500        # ceiling on window half-width
-WINDOW_MAX_POINTS = 2500      # cap on training points per local solve
+WINDOW_MAX_POINTS = 1500      # cap on training points per local solve
 MIN_TRAIN_POINTS = 10         # below this, fall back to the snapped method
 
 
@@ -170,7 +175,8 @@ def gapfill_gaussian_process(q_obs, q50, seed=0):
     Hyperparameters are fitted once on a bounded sample, then each gap (or
     cluster of nearby gaps) is solved exactly against the observations inside a
     local window. Runtime scales with the number of gaps rather than the length
-    of the record.
+    of the record, and peak memory is set by WINDOW_MAX_POINTS rather than by
+    the record length.
 
     Far from any observation the posterior reverts to the mean residual, so
     unanchored gaps at the start or end of a record degrade gracefully towards
@@ -230,6 +236,8 @@ def gapfill_gaussian_process(q_obs, q50, seed=0):
 
         prediction = gp.predict(target.reshape(-1, 1).astype(float))
         gapfilled[target] = q50[target] + (prediction * sd + mu)
+
+        del gp
 
     # anything left unfilled (too few local observations) falls back to the median
     unfilled = ~np.isfinite(gapfilled)
