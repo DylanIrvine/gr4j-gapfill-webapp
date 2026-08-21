@@ -864,103 +864,104 @@ if uploaded_file is not None:
                         ['X1', 'X2', 'X3', 'X4', 'Score']
                     ].corr()
                 )
-    #=================================================== Correlation matrix  
-        section_break()
-        
-        st.subheader(
-            '4. Gap Filling'
-        )    
     
-        gap_method = st.selectbox(
-            'Gap Filling Method',
-            [
-                'Behavioural Median',
-                'Endpoint Snapped Residuals',
-                'Gaussian Process Residuals'
+    #=================================================== Gap filling
+            section_break()
+            
+            st.subheader(
+                '4. Gap Filling'
+            )    
+        
+            gap_method = st.selectbox(
+                'Gap Filling Method',
+                [
+                    'Behavioural Median',
+                    'Endpoint Snapped Residuals',
+                    'Gaussian Process Residuals'
+                ]
+            )
+        
+            if gap_method == 'Behavioural Median':
+            
+                q_gapfilled = gapfill_p50(
+                    q_obs_mmd,
+                    q50
+                )
+            
+            elif gap_method == 'Endpoint Snapped Residuals':
+            
+                q_gapfilled = gapfill_snapped(
+                    q_obs_mmd,
+                    q50
+                )
+            
+            else:
+            
+                q_gapfilled = gapfill_gaussian_process(
+                    q_obs_mmd,
+                    q50
+                )
+        
+            output_df = pd.DataFrame({
+                'Date': dates,
+                'Observed_mm_d': q_obs_mmd,
+                'Gapfilled_mm_d': q_gapfilled,
+                'P05_mm_d': q05,
+                'P50_mm_d': q50,
+                'P95_mm_d': q95,
+                'FilledFlag':
+                    pd.isna(q_obs_mmd).astype(int)
+            })
+        
+            ensemble_df = pd.DataFrame(
+                ensemble.T
+            )
+            
+            ensemble_df.columns = [
+                f'Model_{i+1:03d}'
+                for i in range(
+                    ensemble.shape[0]
+                )
             ]
-        )
+            
+            ensemble_df.insert(
+                0,
+                'Date',
+                dates
+            )    
+            buffer = BytesIO()
+            with pd.ExcelWriter(
+                buffer,
+                engine='openpyxl'
+            ) as writer:
+            
+                output_df.to_excel(
+                    writer,
+                    sheet_name='GapFilled',
+                    index=False
+                )
+            
+                behavioural_df.to_excel(
+                    writer,
+                    sheet_name='BehaviouralModels',
+                    index=False
+                )
+            
+                ensemble_df.to_excel(
+                    writer,
+                    sheet_name='EnsembleHydrographs',
+                    index=False
+                )
+            
+            buffer.seek(0)
     
-        if gap_method == 'Behavioural Median':
-        
-            q_gapfilled = gapfill_p50(
-                q_obs_mmd,
-                q50
+            st.download_button(
+                label='Download Results Workbook',
+                data=buffer,
+                file_name='gr4j_gapfill_results.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
         
-        elif gap_method == 'Endpoint Snapped Residuals':
-        
-            q_gapfilled = gapfill_snapped(
-                q_obs_mmd,
-                q50
-            )
-        
-        else:
-        
-            q_gapfilled = gapfill_gaussian_process(
-                q_obs_mmd,
-                q50
-            )
-    
-        output_df = pd.DataFrame({
-            'Date': dates,
-            'Observed_mm_d': q_obs_mmd,
-            'Gapfilled_mm_d': q_gapfilled,
-            'P05_mm_d': q05,
-            'P50_mm_d': q50,
-            'P95_mm_d': q95,
-            'FilledFlag':
-                pd.isna(q_obs_mmd).astype(int)
-        })
-    
-        ensemble_df = pd.DataFrame(
-            ensemble.T
-        )
-        
-        ensemble_df.columns = [
-            f'Model_{i+1:03d}'
-            for i in range(
-                ensemble.shape[0]
-            )
-        ]
-        
-        ensemble_df.insert(
-            0,
-            'Date',
-            dates
-        )    
-        buffer = BytesIO()
-        with pd.ExcelWriter(
-            buffer,
-            engine='openpyxl'
-        ) as writer:
-        
-            output_df.to_excel(
-                writer,
-                sheet_name='GapFilled',
-                index=False
-            )
-        
-            behavioural_df.to_excel(
-                writer,
-                sheet_name='BehaviouralModels',
-                index=False
-            )
-        
-            ensemble_df.to_excel(
-                writer,
-                sheet_name='EnsembleHydrographs',
-                index=False
-            )
-        
-        buffer.seek(0)
-
-        st.download_button(
-            label='Download Results Workbook',
-            data=buffer,
-            file_name='gr4j_gapfill_results.xlsx',
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-    
 #===============================================================   
     except Exception as e:
     
