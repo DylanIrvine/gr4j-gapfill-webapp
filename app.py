@@ -431,8 +431,6 @@ if uploaded_file is not None:
             best_score = cal_results['best_score']
             behavioural_df = cal_results['behavioural_df']
             #st.write(f'Original behavioural models: {len(behavioural_df)}')
-
-            st.write( f'Models used in ensemble: {len(behavioural_df)}')
             
             if len(behavioural_df) == 0:
             
