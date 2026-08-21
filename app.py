@@ -103,9 +103,9 @@ def fdc(q):
 
 def plot_hydrograph(dates, q_obs, series):
     fig, ax = new_fig(17, 8, [0.10, 0.15, 0.85, 0.75])
-    ax.plot(dates, q_obs, color=C_OBS, alpha=0.6, linewidth=1, label='Observed')
+    ax.plot(dates, q_obs, color=C_OBS, linewidth=1.5, label='Observed')
     for values, colour, label, lw in series:
-        ax.plot(dates, values, color=colour, alpha=0.8, linewidth=lw, label=label)
+        ax.plot(dates, values, color=colour, alpha=0.6, linewidth=lw, label=label)
     ax.set_xlabel('Date')
     ax.set_ylabel('Flow (mm/d)')
     ax.legend()
