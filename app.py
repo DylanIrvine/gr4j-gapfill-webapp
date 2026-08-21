@@ -225,7 +225,7 @@ if uploaded_file is not None:
                 'NSE',
                 f'{nse_value:.3f}'
             )
-        
+        #=========================================================================
         fig = plt.figure(
             figsize=(17/2.54, 8/2.54)
         )
@@ -257,7 +257,7 @@ if uploaded_file is not None:
         ax.set_xlabel('Date')
         
         st.pyplot(fig)
-
+        #========================================================================= Residuals plot
         residuals = (
             q_obs_mmd
             - q_sim_uploaded
@@ -282,7 +282,7 @@ if uploaded_file is not None:
         ax.plot(
             dates,
             log_residuals,
-            color='firebrick',
+            color='royalblue',
             linewidth=0.8
         )
         
@@ -303,7 +303,7 @@ if uploaded_file is not None:
         st.subheader('Residuals - using exploration parameters')
         
         st.pyplot(fig_res)
-
+        #==============================================================
         st.subheader('Observed vs Simulated Scatter - using exploration parameters')
         
         mask = (
@@ -319,8 +319,10 @@ if uploaded_file is not None:
         ax.scatter(
             q_obs_mmd[mask],
             q_sim_uploaded[mask],
+            marker = 'o',
             s=5,
-            alpha=0.3
+            lw=0,
+            alpha=0.4
         )
         
         lim_lo = min(
@@ -565,7 +567,7 @@ if uploaded_file is not None:
                     'Best model NSE',
                     f'{nse_cal:.3f}'
                 )
-
+#=================================================== hydrograph
             fig_cal = plt.figure(
                 figsize=(17/2.54, 8/2.54)
             )
@@ -622,7 +624,7 @@ if uploaded_file is not None:
                 -
                 np.log(q50 + eps)
             )
-            
+#=================================================== residuals           
             fig_cal_res = plt.figure(figsize=(17/2.54, 6/2.54))
             ax = fig_cal_res.add_axes([0.10, 0.18, 0.85, 0.72])
             
@@ -654,110 +656,7 @@ if uploaded_file is not None:
                 & (q_obs_mmd > 0)
                 & (q_cal > 0)
             )
-            
-            fig_cal_scatter = plt.figure(figsize=(8/2.54, 8/2.54))
-            ax = fig_cal_scatter.add_axes([0.10, 0.18, 0.85, 0.72])
-            
-            ax.scatter(
-                q_obs_mmd[mask],
-                q_cal[mask],
-                s=5,
-                alpha=0.3,
-                color='#0DB14B'
-            )
-            
-            lim_lo = min(
-                np.nanmin(q_obs_mmd[mask]),
-                np.nanmin(q_cal[mask])
-            )
-            
-            lim_hi = max(
-                np.nanmax(q_obs_mmd[mask]),
-                np.nanmax(q_cal[mask])
-            )
-            
-            ax.plot(
-                [lim_lo, lim_hi],
-                [lim_lo, lim_hi],
-                'k--'
-            )
-            
-            ax.set_xlim(lim_lo, lim_hi)
-            ax.set_ylim(lim_lo, lim_hi)
-            
-            ax.set_xscale('symlog')
-            ax.set_yscale('symlog')
-            
-            ax.set_xlabel('Observed (mm/d)')
-            ax.set_ylabel('Calibrated GR4J (mm/d)')
-            
-            st.pyplot(fig_cal_scatter)
-            
-            # behavioural parameter distributions
-            fig_hist = plt.figure(figsize=(17/2.54, 10/2.54))
-            
-            st.subheader(
-                'Behavioural Parameter Distributions'
-            )
-            params = ['X1', 'X2', 'X3', 'X4']
-
-            best_lookup = {
-                'X1': best_params['X1'],
-                'X2': best_params['X2'],
-                'X3': best_params['X3'],
-                'X4': best_params['X4']
-            }
-
-            
-            colours = ['#FCB711','#F37021','#CC004C','#6460AA']
-            
-            for i, (param, colour) in enumerate(
-                zip(params, colours)
-            ):
-            
-                ax = fig_hist.add_subplot(
-                    2,
-                    2,
-                    i + 1
-                )
-            
-                ax.hist(
-                    behavioural_df[param],
-                    bins=20,
-                    color=colour,
-                    edgecolor='black',
-                    linewidth=0.5
-                )
-            
-                ax.axvline(
-                    best_lookup[param],
-                    color='black',
-                    linestyle='--',
-                    linewidth=1.5,
-                    label='Best model'
-                )
-            
-                ax.set_title(param)
-                ax.set_ylabel('Count')
-            
-                if param == 'X1':
-                    ax.set_xlabel('Production Store Capacity (mm)')
-            
-                elif param == 'X2':
-                    ax.set_xlabel('Groundwater Exchange (mm/d)')
-            
-                elif param == 'X3':
-                    ax.set_xlabel('Routing Store Capacity (mm)')
-            
-                elif param == 'X4':
-                    ax.set_xlabel('Time Base (days)')
-            
-                ax.legend(
-                    fontsize=7,
-                    frameon=False
-                )         
-                
-            st.pyplot(fig_hist)
+#=================================================== Flow duration curves        
             # calibrated flow duration curve
             def fdc(q):
             
@@ -838,19 +737,122 @@ if uploaded_file is not None:
                 zorder=3
             )
       
-            ax.plot(ex_obs, fdc_ensemble[0], color='red',alpha=0.5, label='First ensemble member')
+            #ax.plot(ex_obs, fdc_ensemble[0], color='red',alpha=0.5, label='First ensemble member')
             
             ax.set_yscale('log')
-            
             ax.set_xlabel('Exceedance (%)')
             ax.set_ylabel('Flow (mm/d)')
-            
             ax.legend()
             
             st.subheader('Flow Duration Curve')
             
             st.pyplot(fig_fdc)
+#=================================================== scatter             
+            fig_cal_scatter = plt.figure(figsize=(8/2.54, 8/2.54))
+            ax = fig_cal_scatter.add_axes([0.10, 0.18, 0.85, 0.72])
+            
+            ax.scatter(
+                q_obs_mmd[mask],
+                q_cal[mask],
+                s=5,
+                alpha=0.3,
+                color='#0DB14B'
+            )
+            
+            lim_lo = min(
+                np.nanmin(q_obs_mmd[mask]),
+                np.nanmin(q_cal[mask])
+            )
+            
+            lim_hi = max(
+                np.nanmax(q_obs_mmd[mask]),
+                np.nanmax(q_cal[mask])
+            )
+            
+            ax.plot(
+                [lim_lo, lim_hi],
+                [lim_lo, lim_hi],
+                'k--'
+            )
+            
+            ax.set_xlim(lim_lo, lim_hi)
+            ax.set_ylim(lim_lo, lim_hi)
+            
+            ax.set_xscale('symlog')
+            ax.set_yscale('symlog')
+            
+            ax.set_xlabel('Observed (mm/d)')
+            ax.set_ylabel('Calibrated GR4J (mm/d)')
+            
+            st.pyplot(fig_cal_scatter)
+#=================================================== histograms            
+            # behavioural parameter distributions
+            fig_hist = plt.figure(figsize=(17/2.54, 10/2.54))
+            
+            st.subheader(
+                'Behavioural Parameter Distributions'
+            )
+            params = ['X1', 'X2', 'X3', 'X4']
 
+            best_lookup = {
+                'X1': best_params['X1'],
+                'X2': best_params['X2'],
+                'X3': best_params['X3'],
+                'X4': best_params['X4']
+            }
+
+            
+            colours = ['#FCB711','#F37021','#CC004C','#6460AA']
+            
+            for i, (param, colour) in enumerate(
+                zip(params, colours)
+            ):
+            
+                ax = fig_hist.add_subplot(
+                    2,
+                    2,
+                    i + 1
+                )
+            
+                ax.hist(
+                    behavioural_df[param],
+                    bins=20,
+                    color=colour,
+                    edgecolor='black',
+                    linewidth=0.5
+                )
+            
+                ax.axvline(
+                    best_lookup[param],
+                    color='black',
+                    linestyle='--',
+                    linewidth=1.5,
+                    label='Best model'
+                )
+            
+                ax.set_title(param)
+                ax.set_ylabel('Count')
+            
+                if param == 'X1':
+                    ax.set_xlabel('Production Store Capacity (mm)')
+            
+                elif param == 'X2':
+                    ax.set_xlabel('Groundwater Exchange (mm/d)')
+            
+                elif param == 'X3':
+                    ax.set_xlabel('Routing Store Capacity (mm)')
+            
+                elif param == 'X4':
+                    ax.set_xlabel('Time Base (days)')
+            
+                ax.legend(
+                    fontsize=7,
+                    frameon=False
+                )         
+                
+            st.pyplot(fig_hist)
+
+#=================================================== Correlation matrix  
             st.subheader('Behavioural Parameter Correlation Matrix')
             
             st.dataframe(
