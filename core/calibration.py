@@ -12,7 +12,7 @@ import pandas as pd
 from scipy.optimize import differential_evolution
 
 from core.models import simulate, PARAM_NAMES, PARAM_BOUNDS, PARAM_ROUNDING
-from core.metrics import score, epsilon_from_obs
+from core.metrics import score, composite_score, epsilon_from_obs
 
 # %% configuration
 MAX_BEHAVIOURAL_MODELS = 200
@@ -22,7 +22,8 @@ PENALTY = 1e9
 
 # %%
 def _objective_function(params, precip, pet, q_obs, warmup_days, metric,
-                        transform_kind, epsilon, model, names, archive):
+                        transform_kind, composite_weight, epsilon, model, names,
+                        archive):
     """Negative criterion, with every valid evaluation appended to archive."""
     param_dict = dict(zip(names, [float(p) for p in params]))
 
@@ -35,8 +36,12 @@ def _objective_function(params, precip, pet, q_obs, warmup_days, metric,
     if mask.sum() < MIN_FITTING_DAYS:
         return PENALTY
 
-    value = score(q_obs[mask], q_sim[mask], metric=metric,
-                  transform_kind=transform_kind, epsilon=epsilon)
+    if composite_weight is None:
+        value = score(q_obs[mask], q_sim[mask], metric=metric,
+                      transform_kind=transform_kind, epsilon=epsilon)
+    else:
+        value = composite_score(q_obs[mask], q_sim[mask], metric=metric,
+                                weight=composite_weight, epsilon=epsilon)
 
     if not np.isfinite(value):
         return PENALTY
@@ -48,7 +53,7 @@ def _objective_function(params, precip, pet, q_obs, warmup_days, metric,
 
 # %%
 def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE',
-                 transform_kind='none', maxiter=25, popsize=12,
+                 transform_kind='none', composite_weight=None, maxiter=25, popsize=12,
                  behavioural_delta=0.05, seed=1, bounds=None, progress_callback=None):
     """Calibrate a GR model and return the best parameter set plus an archive.
 
@@ -60,7 +65,13 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
     warmup_days : int, days excluded from the objective at the start of the record
     metric : 'KGE' or 'NSE'
     transform_kind : 'none', 'sqrt', 'log' or 'inverse', applied to both series
-        before the criterion is computed
+        before the criterion is computed. Ignored when composite_weight is set.
+    composite_weight : optional float in [0, 1]. When set, the criterion becomes
+        a weighted mean of the metric under the untransformed and logarithmic
+        transformations, with this weight on the untransformed component. This
+        asks the optimiser to perform at both ends of the hydrograph rather than
+        trading one for the other. It is a pragmatic calibration target and not
+        a likelihood, so report it as such.
     maxiter, popsize : differential evolution settings. Note that scipy sizes the
         population as popsize times the number of parameters, so GR6J costs half
         again as much per generation as GR4J.
@@ -76,7 +87,8 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
 
     Returns
     -------
-    dict with keys best_params, best_score, behavioural_df, model, epsilon, bounds
+    dict with keys best_params, best_score, behavioural_df, model, epsilon,
+    bounds, seed, composite_weight
 
     Note on interpretation
     ---------------------
@@ -114,6 +126,12 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
 
     bounds_list = [bounds[name] for name in names]
 
+    if composite_weight is not None:
+        composite_weight = float(composite_weight)
+        if not (0.0 <= composite_weight <= 1.0):
+            raise ValueError('composite_weight must lie between 0 and 1, got '
+                             f'{composite_weight}.')
+
     # the transform offset is fixed once from the observations, so every
     # candidate parameter set is scored against exactly the same criterion
     epsilon = epsilon_from_obs(q_obs)
@@ -127,8 +145,8 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
     result = differential_evolution(
         _objective_function,
         bounds=bounds_list,
-        args=(precip, pet, q_obs, warmup_days, metric, transform_kind, epsilon,
-              model, names, archive),
+        args=(precip, pet, q_obs, warmup_days, metric, transform_kind,
+              composite_weight, epsilon, model, names, archive),
         maxiter=maxiter,
         popsize=popsize,
         seed=seed,
@@ -143,7 +161,8 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
         empty = pd.DataFrame(columns=list(names) + ['Score'])
         return {'best_params': best_params, 'best_score': best_score,
                 'behavioural_df': empty, 'model': model, 'epsilon': epsilon,
-                'bounds': bounds}
+                'bounds': bounds, 'seed': int(seed),
+                'composite_weight': composite_weight}
 
     archive_df = pd.DataFrame(archive)
     archive_df = archive_df[np.isfinite(archive_df['Score'])]
@@ -160,7 +179,8 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
 
     return {'best_params': best_params, 'best_score': best_score,
             'behavioural_df': behavioural_df, 'model': model, 'epsilon': epsilon,
-            'bounds': bounds}
+            'bounds': bounds, 'seed': int(seed),
+            'composite_weight': composite_weight}
 
 
 # %% backwards compatible alias
