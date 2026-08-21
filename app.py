@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 
 from core.metrics import kge, nse
 from core.gr4j import simulate
-from core.units import cumecs_to_mmd, mld_to_mmd
+from core.units import cumecs_to_mmd, mmd_to_cumecs, mld_to_mmd, mmd_to_mld
 from core.calibration import calibrate_gr4j, PARAM_BOUNDS
 from core.gapfill import (gapfill_p50, gapfill_snapped, gapfill_gaussian_process,
                           identify_gaps, clip_negative)
@@ -33,10 +33,46 @@ MAX_EXPORT_MODELS = 30
 LONG_FORCING_GAP = 5
 CACHE_TTL = 3600
 
+FLOW_UNITS = ['m3/s', 'ML/d', 'mm/d']
+
+# Suffix appended to exported column names. Filesystem and Excel safe, so no
+# slashes, and unambiguous about which unit system a column is in.
+UNIT_SUFFIX = {'m3/s': 'm3s', 'ML/d': 'MLd', 'mm/d': 'mmd'}
+
+FLOW_SERIES = ['Observed', 'Gapfilled', 'P05', 'P50', 'P95']
+
 PARAM_LABELS = {'X1': 'Production Store Capacity (mm)', 'X2': 'Groundwater Exchange (mm/d)',
                 'X3': 'Routing Store Capacity (mm)', 'X4': 'Time Base (days)'}
 
 GAP_METHODS = ['Behavioural Median', 'Endpoint Snapped Residuals', 'Gaussian Process Residuals']
+
+
+# %% unit conversion
+# GR4J works in mm/d throughout, so flow is converted on the way in and
+# converted back on the way out. Both conversions use the same catchment area,
+# so the round trip is exact to floating point.
+
+def to_mmd(q, units, area_km2):
+    """Convert a flow series from the stated input units to mm/d."""
+    if units == 'm3/s':
+        return cumecs_to_mmd(q, area_km2)
+    if units == 'ML/d':
+        return mld_to_mmd(q, area_km2)
+    return np.asarray(q, dtype=float)
+
+
+def from_mmd(q_mmd, units, area_km2):
+    """Convert a flow series from mm/d back to the stated input units."""
+    if units == 'm3/s':
+        return mmd_to_cumecs(q_mmd, area_km2)
+    if units == 'ML/d':
+        return mmd_to_mld(q_mmd, area_km2)
+    return np.asarray(q_mmd, dtype=float)
+
+
+def unit_factor(units, area_km2):
+    """How many mm/d one unit of the input series represents on this catchment."""
+    return float(to_mmd(np.array([1.0]), units, area_km2)[0])
 
 
 # %% plotting helpers
@@ -141,8 +177,8 @@ def _excel_writer(buffer):
         return pd.ExcelWriter(buffer, engine='openpyxl')
 
 
-@st.cache_data(show_spinner='Building workbook...', max_entries=1, ttl=CACHE_TTL)
-def build_workbook(output_df, behavioural_df, ensemble_df):
+@st.cache_data(show_spinner='Building workbook...', max_entries=2, ttl=CACHE_TTL)
+def build_workbook(output_df, behavioural_df, ensemble_df, metadata_df):
     """Return workbook bytes. Bytes rather than a BytesIO, because a buffer held
     across reruns can be left at EOF and download as an empty file."""
     buffer = BytesIO()
@@ -150,7 +186,77 @@ def build_workbook(output_df, behavioural_df, ensemble_df):
         output_df.to_excel(writer, sheet_name='GapFilled', index=False)
         behavioural_df.to_excel(writer, sheet_name='BehaviouralModels', index=False)
         ensemble_df.to_excel(writer, sheet_name='EnsembleHydrographs', index=False)
+        metadata_df.to_excel(writer, sheet_name='Metadata', index=False)
     return buffer.getvalue()
+
+
+# %% export table builders
+def build_output_df(dates, series_mmd, units, area_km2, include_mmd, include_native):
+    """Assemble the gap filled sheet, with flow columns in one or both unit systems.
+
+    series_mmd is a dict of name to mm/d array, keyed by FLOW_SERIES.
+    """
+    data = {'Date': dates}
+
+    if include_mmd:
+        for name in FLOW_SERIES:
+            data[f'{name}_mmd'] = series_mmd[name]
+
+    if include_native:
+        suffix = UNIT_SUFFIX[units]
+        for name in FLOW_SERIES:
+            data[f'{name}_{suffix}'] = from_mmd(series_mmd[name], units, area_km2)
+
+    data['FilledFlag'] = np.isnan(series_mmd['Observed']).astype(int)
+    return pd.DataFrame(data)
+
+
+def build_ensemble_df(dates, ensemble_mmd, units, area_km2, native):
+    """Ensemble hydrographs in a single unit system, to keep the sheet narrow."""
+    values = from_mmd(ensemble_mmd, units, area_km2) if native else ensemble_mmd
+    suffix = UNIT_SUFFIX[units] if native else 'mmd'
+
+    ensemble_df = pd.DataFrame(values.T,
+                               columns=[f'Model_{i + 1:03d}_{suffix}'
+                                        for i in range(len(values))])
+    ensemble_df.insert(0, 'Date', np.asarray(dates))
+    return ensemble_df
+
+
+def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, sheet_units):
+    """Document what is in the workbook, and in which units.
+
+    Without this, a downstream user opening the file has no way to tell whether
+    a column is a depth or a discharge, or which catchment area was used to
+    convert between them.
+    """
+    units = cal['flow_units']
+    area = cal['area_km2']
+    best = cal['best_params']
+
+    items = [
+        ('Input flow units', units),
+        ('Catchment area (km2)', f'{area:g}'),
+        ('1 input unit expressed in mm/d', f'{unit_factor(units, area):.6g}'),
+        ('GapFilled sheet units', sheet_units),
+        ('EnsembleHydrographs sheet units', ensemble_units),
+        ('Rainfall and PET units', 'mm/d'),
+        ('Objective function', cal['objective']),
+        ('Best objective score', f"{cal['best_score']:.4f}"),
+        ('Behavioural models retained', str(cal['n_behavioural'])),
+        ('Gap filling method', gap_method),
+        ('Days gap filled', str(n_missing)),
+        ('Filled values clipped at zero', str(n_clipped)),
+        ('Forcing interpolated', str(cal['forcing_interpolated'])),
+        ('X1 production store capacity (mm)', f"{best['X1']:.3f}"),
+        ('X2 groundwater exchange (mm/d)', f"{best['X2']:.3f}"),
+        ('X3 routing store capacity (mm)', f"{best['X3']:.3f}"),
+        ('X4 time base (days)', f"{best['X4']:.3f}"),
+        ('P05, P50, P95', 'Percentiles across the behavioural ensemble, per day'),
+        ('FilledFlag', '1 where the observed record was missing and has been filled'),
+    ]
+
+    return pd.DataFrame(items, columns=['Item', 'Value'])
 
 
 # %% header
@@ -196,7 +302,7 @@ flow_col = st.selectbox('Flow Column', columns)
 section_break()
 st.subheader('Catchment Information')
 area_km2 = st.number_input('Catchment Area (km²)', min_value=0.001, value=1000.0, step=1.0)
-flow_units = st.selectbox('Flow Units', ['m3/s', 'ML/d', 'mm/d'])
+flow_units = st.selectbox('Flow Units', FLOW_UNITS)
 
 try:
     dates = pd.to_datetime(df[date_col], dayfirst=True)
@@ -207,12 +313,7 @@ except Exception as exc:
     st.error(f'Could not parse the selected columns: {exc}')
     st.stop()
 
-if flow_units == 'm3/s':
-    q_obs_mmd = cumecs_to_mmd(flow, area_km2)
-elif flow_units == 'ML/d':
-    q_obs_mmd = mld_to_mmd(flow, area_km2)
-else:
-    q_obs_mmd = flow
+q_obs_mmd = to_mmd(flow, flow_units, area_km2)
 
 section_break()
 st.subheader('Data Summary')
@@ -223,6 +324,52 @@ st.write(f'PET Missing Values: {int(np.isnan(pet).sum())}')
 st.write(f'Record starts: {dates.min()}')
 st.write(f'Record ends: {dates.max()}')
 
+# %% units and scaling check
+# The catchment area is the only thing linking discharge to depth. Get it wrong
+# and every metric, parameter and output is rescaled without any error being
+# raised, so the conversion is stated explicitly and sense checked here.
+section_break()
+st.subheader('Flow Units and Scaling')
+
+factor = unit_factor(flow_units, area_km2)
+
+col1, col2 = st.columns(2)
+col1.metric('Input flow units', flow_units)
+col2.metric('Model units', 'mm/d')
+
+if flow_units == 'mm/d':
+    st.write('Flow is already a depth, so no conversion is applied. The catchment area is still '
+             'used to report volumes.')
+else:
+    st.write(f'Over a {area_km2:g} km² catchment, 1 {flow_units} is equivalent to '
+             f'{factor:.6g} mm/d. Flow is converted to mm/d for modelling and converted back for '
+             'export.')
+
+obs_mask_all = np.isfinite(q_obs_mmd) & np.isfinite(rain)
+
+if obs_mask_all.sum() > 0:
+    mean_q_mmd = float(np.mean(q_obs_mmd[obs_mask_all]))
+    mean_p_mmd = float(np.mean(rain[obs_mask_all]))
+    mean_q_native = float(from_mmd(np.array([mean_q_mmd]), flow_units, area_km2)[0])
+
+    st.write(f'Mean observed flow: {mean_q_native:.4g} {flow_units}, equal to {mean_q_mmd:.4g} mm/d '
+             f'or {mean_q_mmd * area_km2:.4g} ML/d.')
+    st.write(f'Mean rainfall over the same days: {mean_p_mmd:.4g} mm/d.')
+
+    if mean_p_mmd > 0:
+        runoff_coefficient = mean_q_mmd / mean_p_mmd
+        st.write(f'Implied runoff coefficient: {runoff_coefficient:.3f}')
+
+        if runoff_coefficient > 1.0:
+            st.error('The runoff coefficient exceeds 1, meaning more water is leaving the '
+                     'catchment than falls on it as rain. Check the catchment area and the flow '
+                     'units, since one of them is almost certainly wrong. Regulated or '
+                     'groundwater-fed systems are the only legitimate exception.')
+        elif runoff_coefficient < 0.001:
+            st.warning('The runoff coefficient is below 0.001. This can be genuine for an '
+                       'ephemeral dryland catchment, but it is also what a wrong catchment area or '
+                       'a units mismatch looks like. Worth confirming before calibrating.')
+
 # %% forcing completeness
 # GR4J carries state forward day by day, so a single missing rainfall or PET
 # value turns every subsequent day into NaN.
@@ -232,6 +379,7 @@ forcing_interpolated = False
 
 if n_rain_missing > 0 or n_pet_missing > 0:
 
+    section_break()
     st.warning(f'The forcing record is incomplete: {n_rain_missing} missing rainfall values and '
                f'{n_pet_missing} missing PET values. GR4J carries state forward, so the simulation '
                'will be NaN from the first missing value onwards unless these are filled.')
@@ -272,7 +420,9 @@ data_key = (uploaded_file.name, getattr(uploaded_file, 'size', len(df)), date_co
 section_break()
 st.subheader('2. Manual GR4J Simulation')
 st.write('Use this section to manually adjust the GR4J parameters and assess model behaviour using '
-         'the hydrograph, residuals, scatter plot, KGE, and NSE before running automatic calibration.')
+         'the hydrograph, residuals, scatter plot, KGE, and NSE before running automatic '
+         'calibration. All plots in this section and below are in mm/d, the units the model works '
+         'in. Exports can be written in mm/d, the input units, or both.')
 
 x1 = st.number_input('X1 Production Store Capacity (mm)', min_value=1.0, max_value=3000.0, value=500.0)
 x2 = st.number_input('X2 Groundwater Exchange (mm/d)', min_value=-25.0, max_value=5.0, value=0.0)
@@ -360,12 +510,19 @@ if st.button('Calibrate GR4J'):
     # holding it, then rebuilding the flow duration curve array from it on every
     # rerun, is what pushes a multi-decade record past the container memory
     # limit and gets the app restarted.
+    #
+    # The flow units and catchment area are stored alongside the results, so
+    # exports are converted with the same values the calibration used even if
+    # the widgets are changed afterwards.
     obs_mask = np.isfinite(q_obs_mmd)
     fdc_ensemble = np.array([fdc(sim[obs_mask])[1] for sim in ensemble])
 
     st.session_state['cal'] = {
         'data_key': data_key,
         'objective': objective,
+        'flow_units': flow_units,
+        'area_km2': float(area_km2),
+        'forcing_interpolated': forcing_interpolated,
         'dates': dates,
         'q_obs': q_obs_mmd,
         'behavioural_df': behavioural_df,
@@ -404,6 +561,8 @@ if cal['data_key'] != data_key:
 
 cal_dates = cal['dates']
 q_obs = cal['q_obs']
+cal_units = cal['flow_units']
+cal_area = cal['area_km2']
 behavioural_df = cal['behavioural_df']
 best_params = cal['best_params']
 q_cal = cal['q_cal']
@@ -484,7 +643,7 @@ with st.expander('Advanced Parameter Diagnostics'):
                'than a random sample of parameter space, so the spread reflects local sensitivity '
                'around the optimum rather than a formal predictive uncertainty.')
 
-# %% 4. gap filling and download
+# %% 4. gap filling
 section_break()
 st.subheader('4. Gap Filling')
 
@@ -498,6 +657,12 @@ gap_lengths = [g['length_days'] for g in identify_gaps(q_obs)]
 
 st.write(f'Days gap filled: {n_missing} of {len(q_obs)}, across {len(gap_lengths)} gaps. '
          f'Longest gap: {max(gap_lengths, default=0)} days.')
+
+if n_missing > 0:
+    filled_mask = np.isnan(q_obs)
+    filled_volume_ml = float(np.nansum(q_gapfilled[filled_mask])) * cal_area
+    st.write(f'Volume attributed to filled days: {filled_volume_ml:,.0f} ML '
+             f'({filled_volume_ml / 1000:,.1f} GL).')
 
 if n_clipped > 0:
     st.warning(f'{n_clipped} gap filled values were negative and have been clipped to zero. '
@@ -513,24 +678,75 @@ ax.set_ylabel('Flow (mm/d)')
 ax.legend()
 show(fig_gap)
 
-output_df = pd.DataFrame({'Date': cal_dates, 'Observed_mm_d': q_obs, 'Gapfilled_mm_d': q_gapfilled,
-                          'P05_mm_d': q05, 'P50_mm_d': q50, 'P95_mm_d': q95,
-                          'FilledFlag': np.isnan(q_obs).astype(int)})
+# %% 5. export
+section_break()
+st.subheader('5. Download Results')
 
-ensemble_export = cal['ensemble_export']
-ensemble_df = pd.DataFrame(ensemble_export.T,
-                           columns=[f'Model_{i + 1:03d}' for i in range(len(ensemble_export))])
-ensemble_df.insert(0, 'Date', cal_dates.to_numpy())
+native_label = f'{cal_units} only (as uploaded)'
+both_label = f'Both mm/d and {cal_units}'
 
-workbook_bytes = build_workbook(output_df, behavioural_df, ensemble_df)
+if cal_units == 'mm/d':
+    st.write('The flow column was uploaded in mm/d, so the export is in mm/d and no conversion is '
+             'applied.')
+    export_choice = 'mm/d only'
+else:
+    st.write(f'GR4J works in mm/d. Flow was uploaded in {cal_units} and can be written back in '
+             f'either unit system, converted using the {cal_area:g} km² catchment area recorded at '
+             'calibration time.')
+    export_choice = st.radio('Export units', [both_label, 'mm/d only', native_label], index=0)
+
+include_mmd = export_choice in ('mm/d only', both_label)
+include_native = export_choice in (native_label, both_label) and cal_units != 'mm/d'
+
+# Ensemble hydrographs are written in one unit system only, to keep that sheet
+# to 30 columns rather than 60 on a multi-decade record.
+ensemble_native = include_native and not include_mmd
+ensemble_units = cal_units if ensemble_native else 'mm/d'
+
+if include_mmd and include_native:
+    sheet_units = f'mm/d and {cal_units}, indicated by the column suffix'
+    file_tag = f'mmd_and_{UNIT_SUFFIX[cal_units]}'
+elif include_native:
+    sheet_units = cal_units
+    file_tag = UNIT_SUFFIX[cal_units]
+else:
+    sheet_units = 'mm/d'
+    file_tag = 'mmd'
+
+series_mmd = {'Observed': q_obs, 'Gapfilled': q_gapfilled,
+              'P05': q05, 'P50': q50, 'P95': q95}
+
+output_df = build_output_df(cal_dates, series_mmd, cal_units, cal_area,
+                            include_mmd, include_native)
+
+ensemble_df = build_ensemble_df(cal_dates, cal['ensemble_export'], cal_units, cal_area,
+                                ensemble_native)
+
+metadata_df = build_metadata_df(cal, gap_method, n_missing, n_clipped,
+                                ensemble_units, sheet_units)
+
+st.write('Columns in the workbook:')
+st.dataframe(pd.DataFrame({'Column': output_df.columns,
+                           'Units': ['date' if c == 'Date'
+                                     else 'flag' if c == 'FilledFlag'
+                                     else cal_units if c.endswith(UNIT_SUFFIX[cal_units])
+                                     and cal_units != 'mm/d'
+                                     else 'mm/d'
+                                     for c in output_df.columns]}),
+             hide_index=True)
+
+workbook_bytes = build_workbook(output_df, behavioural_df, ensemble_df, metadata_df)
 
 st.download_button(
-    label='Download Results Workbook',
+    label=f'Download Results Workbook ({sheet_units})',
     data=workbook_bytes,
-    file_name='gr4j_gapfill_results.xlsx',
+    file_name=f'gr4j_gapfill_results_{file_tag}.xlsx',
     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     key='download_workbook',
 )
 
-st.caption(f'Workbook contains the gap filled series, the {cal["n_behavioural"]} behavioural '
-           f'parameter sets, and {len(ensemble_export)} ensemble hydrographs.')
+st.caption(f'Four sheets: GapFilled in {sheet_units}, BehaviouralModels holding the '
+           f'{cal["n_behavioural"]} retained parameter sets, EnsembleHydrographs holding '
+           f'{len(cal["ensemble_export"])} members in {ensemble_units}, and Metadata recording the '
+           'units, catchment area and calibration settings. Switch the export units above and '
+           'download again if you want a second copy in the other unit system.')
