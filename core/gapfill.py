@@ -172,7 +172,9 @@ def identify_gaps(q_obs):
             'gap_id': int(gap_id),
             'start_idx': int(start),
             'end_idx': int(end),
-            'length_days': int(end - start + 1)
+            'length_days': int(end - start + 1),
+            'has_left_anchor': bool(start > 0),
+            'has_right_anchor': bool(end < len(q_obs) - 1)
         })
 
     return gaps
