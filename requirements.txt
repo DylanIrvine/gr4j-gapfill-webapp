@@ -6,3 +6,4 @@ scipy
 reportlab
 openpyxl
 scikit-learn
+xlsxwriter
