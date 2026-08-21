@@ -847,10 +847,10 @@ if uploaded_file is not None:
                     frameon=False
                 )    
                 
-             fig_hist.subplots_adjust(
-                hspace=0.35,
-                wspace=0.20
-            )               
+                fig_hist.subplots_adjust(
+                    hspace=0.35,
+                    wspace=0.20
+                )               
             st.pyplot(fig_hist)
 
 #=================================================== Correlation matrix  
