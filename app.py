@@ -531,7 +531,9 @@ if uploaded_file is not None:
             st.session_state['behavioural_df'] = behavioural_df
             
             st.session_state['best_params'] = best_params
-            st.session_state['best_score'] = best_score            
+            st.session_state['best_score'] = best_score       
+            st.session_state['q_cal'] = q_cal
+
             
             st.write(f'Behavioural Models Retained: {len(behavioural_df)}')
             st.write(f'Best {objective}: {best_score:.3f}')
