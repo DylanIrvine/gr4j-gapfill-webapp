@@ -954,12 +954,12 @@ if uploaded_file is not None:
         
         buffer.seek(0)
 
-    st.download_button(
-        label='Download Results Workbook',
-        data=buffer,
-        file_name='gr4j_gapfill_results.xlsx',
-        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    )
+        st.download_button(
+            label='Download Results Workbook',
+            data=buffer,
+            file_name='gr4j_gapfill_results.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
     
 #===============================================================   
     except Exception as e:
