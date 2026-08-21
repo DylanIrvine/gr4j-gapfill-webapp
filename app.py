@@ -3,11 +3,13 @@
 # Dylan Irvine, Charles Darwin University
 # Requires streamlit >= 1.30
 
+import gc
+from io import BytesIO
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from io import BytesIO
 
 from core.metrics import kge, nse
 from core.gr4j import simulate
@@ -29,6 +31,7 @@ C_OBS, C_SIM, C_CAL = 'black', 'royalblue', '#0DB14B'
 C_PARAM = ['#FCB711', '#F37021', '#CC004C', '#6460AA']
 MAX_EXPORT_MODELS = 30
 LONG_FORCING_GAP = 5
+CACHE_TTL = 3600
 
 PARAM_LABELS = {'X1': 'Production Store Capacity (mm)', 'X2': 'Groundwater Exchange (mm/d)',
                 'X3': 'Routing Store Capacity (mm)', 'X4': 'Time Base (days)'}
@@ -103,13 +106,17 @@ def longest_gap(series):
 # Streamlit reruns the whole script on every widget interaction, including a
 # click on the download button. Anything expensive that is neither cached nor
 # held in session_state is recomputed on every one of those reruns.
+#
+# Caches are shared across sessions on the same container and are a common cause
+# of gradual memory growth on Community Cloud, so entry counts are deliberately
+# small and everything expires after an hour.
 
-@st.cache_data(show_spinner=False, max_entries=32)
+@st.cache_data(show_spinner=False, max_entries=8, ttl=CACHE_TTL)
 def run_gr4j(rain, pet, x1, x2, x3, x4):
     return simulate(rain, pet, {'X1': x1, 'X2': x2, 'X3': x3, 'X4': x4})
 
 
-@st.cache_data(show_spinner='Gap filling...', max_entries=8)
+@st.cache_data(show_spinner='Gap filling...', max_entries=3, ttl=CACHE_TTL)
 def run_gapfill(q_obs, q50, method):
     if method == 'Behavioural Median':
         return gapfill_p50(q_obs, q50)
@@ -118,12 +125,28 @@ def run_gapfill(q_obs, q50, method):
     return gapfill_gaussian_process(q_obs, q50)
 
 
-@st.cache_data(show_spinner='Building workbook...', max_entries=4)
+def _excel_writer(buffer):
+    """Prefer xlsxwriter in constant memory mode.
+
+    openpyxl instantiates a Python object per cell before saving, which for a
+    multi-decade daily record with 30 ensemble columns runs to hundreds of
+    thousands of objects. xlsxwriter with constant_memory streams each row to a
+    temporary file instead and keeps memory flat.
+    """
+    try:
+        import xlsxwriter  # noqa: F401
+        return pd.ExcelWriter(buffer, engine='xlsxwriter',
+                              engine_kwargs={'options': {'constant_memory': True}})
+    except ImportError:
+        return pd.ExcelWriter(buffer, engine='openpyxl')
+
+
+@st.cache_data(show_spinner='Building workbook...', max_entries=1, ttl=CACHE_TTL)
 def build_workbook(output_df, behavioural_df, ensemble_df):
     """Return workbook bytes. Bytes rather than a BytesIO, because a buffer held
     across reruns can be left at EOF and download as an empty file."""
     buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+    with _excel_writer(buffer) as writer:
         output_df.to_excel(writer, sheet_name='GapFilled', index=False)
         behavioural_df.to_excel(writer, sheet_name='BehaviouralModels', index=False)
         ensemble_df.to_excel(writer, sheet_name='EnsembleHydrographs', index=False)
@@ -294,7 +317,7 @@ with st.expander('Advanced Calibration Settings'):
     maxiter = int(st.number_input('Maximum Iterations', value=25, min_value=1))
     popsize = int(st.number_input('Population Size', value=12, min_value=1))
 
-if st.button('Calibrate GR4J', type='primary'):
+if st.button('Calibrate GR4J'):
 
     cal_bar = st.progress(0.0, text='Calibrating GR4J...')
     generation = {'n': 0}
@@ -331,27 +354,44 @@ if st.button('Calibrate GR4J', type='primary'):
     # Everything the rest of the app needs goes into session_state in one dict.
     # Session state survives the rerun that Streamlit triggers on any widget
     # interaction, including the download button, so the results persist.
+    #
+    # Only summary arrays and the ensemble members that are actually exported
+    # are retained. The full ensemble is a 200 by record-length array, and
+    # holding it, then rebuilding the flow duration curve array from it on every
+    # rerun, is what pushes a multi-decade record past the container memory
+    # limit and gets the app restarted.
+    obs_mask = np.isfinite(q_obs_mmd)
+    fdc_ensemble = np.array([fdc(sim[obs_mask])[1] for sim in ensemble])
+
     st.session_state['cal'] = {
         'data_key': data_key,
         'objective': objective,
         'dates': dates,
         'q_obs': q_obs_mmd,
         'behavioural_df': behavioural_df,
+        'n_behavioural': len(behavioural_df),
         'best_params': best_params,
         'best_score': cal_results['best_score'],
         'q_cal': simulate(rain, pet, best_params),
-        'ensemble': ensemble,
         'q05': np.nanpercentile(ensemble, 5, axis=0),
         'q50': np.nanpercentile(ensemble, 50, axis=0),
         'q95': np.nanpercentile(ensemble, 95, axis=0),
+        'fdc05': np.nanpercentile(fdc_ensemble, 5, axis=0),
+        'fdc50': np.nanpercentile(fdc_ensemble, 50, axis=0),
+        'fdc95': np.nanpercentile(fdc_ensemble, 95, axis=0),
+        'ensemble_export': ensemble[:min(MAX_EXPORT_MODELS, len(ensemble))].copy(),
     }
+
+    del ensemble, fdc_ensemble
+    gc.collect()
 
 # %% 3b. calibration results, rendered from session_state on every rerun
 cal = st.session_state.get('cal')
 
 if cal is None:
     st.info('Run a calibration to produce the behavioural ensemble, the gap filled series, and the '
-            'downloadable workbook.')
+            'downloadable workbook. Note that results are held for the current browser session '
+            'only, so refreshing the page clears them.')
     st.stop()
 
 if cal['data_key'] != data_key:
@@ -367,10 +407,9 @@ q_obs = cal['q_obs']
 behavioural_df = cal['behavioural_df']
 best_params = cal['best_params']
 q_cal = cal['q_cal']
-ensemble = cal['ensemble']
 q05, q50, q95 = cal['q05'], cal['q50'], cal['q95']
 
-st.write(f'Behavioural Models Retained: {len(behavioural_df)}')
+st.write(f"Behavioural Models Retained: {cal['n_behavioural']}")
 st.write(f"Best {cal['objective']}: {cal['best_score']:.3f}")
 st.dataframe(behavioural_df.head(20))
 
@@ -402,18 +441,14 @@ show(fig_cal)
 st.subheader('Behavioural Median Residuals')
 show(plot_log_residuals(cal_dates, q_obs, q50, C_CAL))
 
-# flow duration curve
-obs_mask = np.isfinite(q_obs)
+# flow duration curve, from percentiles computed once at calibration time
 ex_obs, q_obs_fdc = fdc(q_obs)
-fdc_ensemble = np.array([fdc(sim[obs_mask])[1] for sim in ensemble])
 
 st.subheader('Flow Duration Curve')
 fig_fdc, ax = new_fig(10, 8, [0.15, 0.15, 0.75, 0.75])
-ax.fill_between(ex_obs, np.nanpercentile(fdc_ensemble, 5, axis=0),
-                np.nanpercentile(fdc_ensemble, 95, axis=0), color=C_CAL, alpha=0.5,
+ax.fill_between(ex_obs, cal['fdc05'], cal['fdc95'], color=C_CAL, alpha=0.5,
                 label='5-95% behavioural range', zorder=1)
-ax.plot(ex_obs, np.nanpercentile(fdc_ensemble, 50, axis=0), color=C_CAL, linewidth=2,
-        label='Behavioural median', zorder=2)
+ax.plot(ex_obs, cal['fdc50'], color=C_CAL, linewidth=2, label='Behavioural median', zorder=2)
 ax.plot(ex_obs, q_obs_fdc, color=C_OBS, linewidth=2, label='Observed', zorder=3)
 ax.set_yscale('log')
 ax.set_xlabel('Exceedance (%)')
@@ -482,9 +517,9 @@ output_df = pd.DataFrame({'Date': cal_dates, 'Observed_mm_d': q_obs, 'Gapfilled_
                           'P05_mm_d': q05, 'P50_mm_d': q50, 'P95_mm_d': q95,
                           'FilledFlag': np.isnan(q_obs).astype(int)})
 
-n_export = min(MAX_EXPORT_MODELS, ensemble.shape[0])
-ensemble_df = pd.DataFrame(ensemble[:n_export, :].T,
-                           columns=[f'Model_{i + 1:03d}' for i in range(n_export)])
+ensemble_export = cal['ensemble_export']
+ensemble_df = pd.DataFrame(ensemble_export.T,
+                           columns=[f'Model_{i + 1:03d}' for i in range(len(ensemble_export))])
 ensemble_df.insert(0, 'Date', cal_dates.to_numpy())
 
 workbook_bytes = build_workbook(output_df, behavioural_df, ensemble_df)
@@ -496,3 +531,6 @@ st.download_button(
     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     key='download_workbook',
 )
+
+st.caption(f'Workbook contains the gap filled series, the {cal["n_behavioural"]} behavioural '
+           f'parameter sets, and {len(ensemble_export)} ensemble hydrographs.')
