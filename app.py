@@ -320,6 +320,7 @@ if uploaded_file is not None:
             q_obs_mmd[mask],
             q_sim_uploaded[mask],
             marker = 'o',
+            color = 'royalblue',
             s=5,
             lw=0,
             alpha=0.4
