@@ -23,6 +23,11 @@ from core.units import cumecs_to_mmd, mmd_to_cumecs, mld_to_mmd, mmd_to_mld
 from core.calibration import calibrate_gr
 from core.gapfill import (gapfill_p50, gapfill_snapped, gapfill_gaussian_process,
                           identify_gaps, clip_negative)
+from core.baseflow import (lyne_hollick, recession_alpha, cease_to_flow,
+                           DEFAULT_ALPHA, DEFAULT_PASSES, DEFAULT_REFLECT,
+                           RECESSION_MIN_LENGTH, RECESSION_SKIP_DAYS,
+                           RECESSION_QUANTILE)
+from core.signatures import (build_daily_frame, build_all_products, MONTH_NAMES)
 
 # %% plot settings
 plt.style.use('default')
@@ -37,6 +42,7 @@ C_OBS, C_SIM, C_CAL = 'black', 'royalblue', '#0DB14B'
 C_PARAM = ['#FCB711', '#F37021', '#CC004C', '#6460AA', '#0DB14B', '#2BA9E0']
 MAX_EXPORT_MODELS = 30
 MAX_HISTORY = 20
+C_BASE = '#2BA9E0'
 LONG_FORCING_GAP = 5
 CACHE_TTL = 3600
 GR6J_MIN_WARMUP = 1095
@@ -257,6 +263,17 @@ def run_gapfill(q_obs, q50, method):
     return gapfill_gaussian_process(q_obs, q50)
 
 
+@st.cache_data(show_spinner='Separating baseflow...', max_entries=3, ttl=CACHE_TTL)
+def run_baseflow(q, alpha, passes, n_reflect):
+    return lyne_hollick(q, alpha=alpha, passes=passes, n_reflect=n_reflect)
+
+
+@st.cache_data(show_spinner=False, max_entries=3, ttl=CACHE_TTL)
+def run_recession_alpha(q, min_length, skip_days, quantile):
+    return recession_alpha(q, min_length=min_length, skip_days=skip_days,
+                           quantile=quantile)
+
+
 def _write_workbook_rowwise(sheets):
     """Write the sheets one row at a time using xlsxwriter constant memory mode.
 
@@ -311,14 +328,19 @@ def build_workbook(output_df, behavioural_df, ensemble_df, metadata_df):
         return buffer.getvalue()
 
 
-def build_results_zip(workbook_bytes, workbook_name, figures, readme_text):
-    """Bundle the workbook, every figure on screen, and a contents note."""
+def build_results_zip(workbook_bytes, workbook_name, figures, readme_text, products=None):
+    """Bundle the workbook, every figure on screen, the CSV products and a note."""
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(workbook_name, workbook_bytes)
         archive.writestr('README.txt', readme_text)
+
         for name, png in figures.items():
             archive.writestr(f'figures/{name}.png', png)
+
+        for name, table in (products or {}).items():
+            archive.writestr(f'csv/{name}.csv', table.to_csv(index=False))
+
     return buffer.getvalue()
 
 
@@ -1014,9 +1036,178 @@ ax.set_ylabel('Flow (mm/d)')
 ax.legend()
 show(fig_gap, 'gapfilled_hydrograph')
 
-# %% 6. export
+# %% 6. hydrological analysis
 section_break()
-st.subheader('6. Download Results')
+st.subheader('6. Hydrological Analysis')
+st.write('Baseflow separation and the water year, seasonal and monthly summaries, computed on the '
+         'gap filled series. Every product is written to the download package as a CSV.')
+
+col_wy, col_ctf = st.columns(2)
+
+wy_start_month = col_wy.selectbox(
+    'Water Year Starts In', list(range(1, 13)), index=8,
+    format_func=lambda m: MONTH_NAMES[m - 1],
+    help='A water year is labelled by the calendar year it starts in, so with a September '
+         'start, September 2024 to August 2025 is the 2024 water year. September suits the '
+         'wet-dry tropics, since it sits near the dry season minimum and keeps a wet season '
+         'inside one water year.')
+
+ctf_threshold = col_ctf.number_input(
+    'Cease-to-Flow Threshold (mm/d)', value=0.0, min_value=0.0, format='%.5f',
+    help='Days at or below this are counted as cease-to-flow. Zero is the strict definition. '
+         'A small positive value is often more useful, and is necessary for GR6J, whose '
+         'exponential store cannot reach exactly zero, so modelled dry periods would otherwise '
+         'never register.')
+
+st.markdown('**Baseflow Separation (Lyne and Hollick)**')
+
+alpha_mode = st.radio('Filter coefficient', ['Derive from recession', 'Set manually'],
+                      horizontal=True)
+
+with st.expander('Advanced Baseflow Settings'):
+    bf_passes = int(st.number_input('Filter Passes', value=DEFAULT_PASSES, min_value=3, step=2))
+    bf_reflect = int(st.number_input('Reflection Length (days)', value=DEFAULT_REFLECT,
+                                     min_value=5))
+    st.caption('Passes must be odd. The reflection pads both ends of each block so the recursive '
+               'filter has run-in, and is trimmed off afterwards.')
+
+    st.markdown('**Recession extraction**')
+    rec_min_length = int(st.number_input('Minimum Recession Length (days)',
+                                         value=RECESSION_MIN_LENGTH, min_value=2))
+    rec_skip = int(st.number_input('Days Skipped After Each Peak',
+                                   value=RECESSION_SKIP_DAYS, min_value=0))
+    rec_quantile = st.slider('Ratio Quantile', min_value=0.05, max_value=0.95,
+                             value=RECESSION_QUANTILE, step=0.05)
+    st.caption('Consecutive falling days form a recession segment. The first few days after a '
+               'peak are still dominated by quickflow, so they are dropped. Alpha is then the '
+               'chosen quantile of the daily ratio Q(t)/Q(t-1). A real hydrograph mixes a fast '
+               'and a slow recession, so the low quantiles sample the fast component and the '
+               'high quantiles the slow one. A wide interquartile range below means the estimate '
+               'is not uniquely defined for this catchment.')
+
+recession = run_recession_alpha(q_gapfilled, rec_min_length, rec_skip, rec_quantile)
+
+if alpha_mode == 'Derive from recession':
+    if np.isfinite(recession['alpha']):
+        bf_alpha = float(recession['alpha'])
+        st.write(f'Derived alpha: **{bf_alpha:.4f}** from {recession["n_segments"]} recession '
+                 f'segments and {recession["n_ratios"]} days. Ratio quartiles '
+                 f'{recession["q25"]:.4f} / {recession["q50"]:.4f} / {recession["q75"]:.4f}.')
+        spread = recession['q75'] - recession['q25']
+        if spread > 0.05:
+            st.warning(f'The interquartile range of the daily recession ratio is {spread:.3f}, '
+                       'which is wide. The hydrograph is mixing fast and slow recessions, so the '
+                       'derived alpha depends materially on the quantile chosen. Report the '
+                       'quartiles alongside the value, and consider a manual alpha for '
+                       'comparability with other studies.')
+    else:
+        bf_alpha = DEFAULT_ALPHA
+        st.warning(f'Too few usable recession days were found, so the conventional '
+                   f'{DEFAULT_ALPHA} is used instead.')
+else:
+    bf_alpha = st.slider('Alpha', min_value=0.900, max_value=0.995, value=DEFAULT_ALPHA,
+                         step=0.005)
+    if np.isfinite(recession['alpha']):
+        st.caption(f'For comparison, the recession-derived value for this series is '
+                   f'{recession["alpha"]:.4f}. The conventional {DEFAULT_ALPHA} comes from '
+                   'Nathan and McMahon (1990), who chose it because the separations resembled '
+                   'manual ones on Australian catchments, not from recession theory.')
+
+separation = run_baseflow(q_gapfilled, bf_alpha, bf_passes, bf_reflect)
+q_baseflow = separation['baseflow']
+
+col_a, col_b, col_c = st.columns(3)
+col_a.metric('Baseflow Index', f'{separation["bfi"]:.3f}')
+col_b.metric('Alpha', f'{bf_alpha:.4f}')
+col_c.metric('Passes', f'{bf_passes}')
+
+st.subheader('Baseflow Separation')
+fig_bf, ax = new_fig(17, 8, [0.10, 0.15, 0.85, 0.75])
+ax.plot(cal_dates, q_gapfilled, color=C_OBS, linewidth=0.8, label='Total flow')
+ax.plot(cal_dates, q_baseflow, color=C_BASE, linewidth=1.2, label='Baseflow')
+ax.fill_between(cal_dates, 0, q_baseflow, color=C_BASE, alpha=0.3)
+ax.set_xlabel('Date')
+ax.set_ylabel('Flow (mm/d)')
+ax.set_yscale('log')
+ax.legend()
+show(fig_bf, 'baseflow_separation')
+
+# %% products
+ctf_days = cease_to_flow(q_gapfilled, threshold=ctf_threshold)
+
+daily_frame = build_daily_frame(cal_dates, q_gapfilled, np.isnan(q_obs).astype(int),
+                                cal_area, start_month=wy_start_month,
+                                baseflow_mmd=q_baseflow, ctf_flag=ctf_days)
+
+products = build_all_products(daily_frame, cal_area, start_month=wy_start_month)
+
+annual = products.get('annual_flow')
+
+if annual is None or annual.empty:
+    st.warning('The record does not span a single complete water year, so no annual products '
+               'could be produced. Partial periods are excluded at both ends of the record.')
+else:
+    st.subheader('Annual Flow by Water Year')
+    st.write(f'{len(annual)} complete water years, {int(annual["WaterYear"].min())} to '
+             f'{int(annual["WaterYear"].max())}. Partial water years at each end of the record '
+             'are excluded, following the Hydrologic Reference Stations convention.')
+
+    anomaly = products['annual_anomaly']
+
+    fig_annual, ax = new_fig(17, 8, [0.10, 0.15, 0.85, 0.75])
+    colours = [C_CAL if pf < 20 else '#F37021' for pf in annual['PercentFilled']]
+    ax.bar(annual['WaterYear'], annual['Flow_GL'], color=colours, edgecolor='black',
+           linewidth=0.4, label='Annual flow')
+    ax.axhline(annual['Flow_GL'].mean(), color='black', linestyle='--', linewidth=1,
+               label=f'Mean {annual["Flow_GL"].mean():.1f} GL')
+    ax.plot(anomaly['WaterYear'], anomaly['Anomaly_MA5_GL'] + annual['Flow_GL'].mean(),
+            color=C_OBS, linewidth=1.5, label='5 year moving average')
+    ax.set_xlabel(f'Water year (starting {MONTH_NAMES[wy_start_month - 1]})')
+    ax.set_ylabel('Flow (GL/yr)')
+    ax.legend(fontsize=7)
+    show(fig_annual, 'annual_flow')
+    st.caption('Bars are shaded orange where more than 20 per cent of the water year was gap '
+               'filled, so a year carried largely by the model is visible rather than implied.')
+
+    if 'annual_baseflow' in products:
+        st.subheader('Annual Baseflow')
+        ab = products['annual_baseflow']
+        fig_ab, ax = new_fig(17, 7, [0.10, 0.16, 0.78, 0.74])
+        ax.bar(ab['WaterYear'], ab['TotalFlow_GL'], color='#DDDDDD', edgecolor='black',
+               linewidth=0.4, label='Total flow')
+        ax.bar(ab['WaterYear'], ab['Baseflow_GL'], color=C_BASE, edgecolor='black',
+               linewidth=0.4, label='Baseflow')
+        ax.set_xlabel(f'Water year (starting {MONTH_NAMES[wy_start_month - 1]})')
+        ax.set_ylabel('Flow (GL/yr)')
+        ax.legend(fontsize=7, loc='upper left')
+        ax_bfi = ax.twinx()
+        ax_bfi.plot(ab['WaterYear'], ab['BFI'], color='black', marker='o', markersize=3,
+                    linewidth=1)
+        ax_bfi.set_ylabel('BFI (-)')
+        ax_bfi.set_ylim(0, 1)
+        show(fig_ab, 'annual_baseflow')
+
+    if 'annual_cease_to_flow' in products:
+        ctf_table = products['annual_cease_to_flow']
+        total_ctf = int(ctf_table['CeaseToFlowDays'].sum())
+        modelled_ctf = int(ctf_table['ModelledCeaseToFlowDays'].sum())
+        st.write(f'Cease-to-flow days at or below {ctf_threshold:g} mm/d: {total_ctf} across the '
+                 f'complete water years, of which {modelled_ctf} fall on gap filled days.')
+        if cal_model == 'GR6J' and ctf_threshold == 0.0:
+            st.warning('GR6J cannot produce exactly zero flow, so at a threshold of zero no gap '
+                       'filled day will ever be counted as cease-to-flow. Any dry period that '
+                       'was filled is being recorded as flowing. Set a small positive threshold, '
+                       'or read the observed and modelled columns separately.')
+
+    with st.expander('Annual Summary Table'):
+        st.dataframe(annual, hide_index=True)
+
+st.write(f'**{len(products)} CSV products** are included in the download package: '
+         + ', '.join(sorted(products)) + '.')
+
+# %% 7. export
+section_break()
+st.subheader('7. Download Results')
 
 native_label = f'{cal_units} only (as uploaded)'
 both_label = f'Both mm/d and {cal_units}'
@@ -1082,6 +1273,12 @@ readme_lines = [
     f'Warm-up days excluded: {cal["warmup_days"]}',
     f'Behavioural models retained: {cal["n_behavioural"]}',
     f'Gap filling method: {gap_method}',
+    f'Water year starts in: {MONTH_NAMES[wy_start_month - 1]} '
+    f'(labelled by the year it starts in)',
+    f'Baseflow filter: Lyne and Hollick, alpha {bf_alpha:.4f}, {bf_passes} passes',
+    f'Alpha source: {alpha_mode.lower()}',
+    f'Baseflow index over the record: {separation["bfi"]:.4f}',
+    f'Cease-to-flow threshold: {ctf_threshold:g} mm/d',
     f'Catchment area: {cal_area:g} km2',
     f'Input flow units: {cal_units}',
     f'Workbook units: {sheet_units}',
@@ -1091,6 +1288,23 @@ readme_lines = [
     '      four sheets: GapFilled, BehaviouralModels, EnsembleHydrographs, Metadata',
     '  figures/',
     '      PNG at 200 dpi of every figure shown in the app',
+    '  csv/',
+    '      water year, seasonal and monthly products from the gap filled series',
+    '',
+    'Conventions used in the csv products',
+    '  Water year label is the calendar year the water year starts in.',
+    '  Partial water years, seasons and months at each end of the record are excluded.',
+    '  Seasons are the standard meteorological ones, labelled by the year they start in,',
+    '    so Summer 2024 is December 2024 to February 2025.',
+    '  Percentiles use the exceedance convention: Q10 is the flow exceeded 10 per cent',
+    '    of the time, which is the 90th percentile of the flow values.',
+    '  PercentFilled is the share of days in that period that came from the model',
+    '    rather than the gauge. Read every aggregate against it.',
+    '',
+    'CSV products included:',
+]
+readme_lines += [f'  csv/{name}.csv' for name in sorted(products)]
+readme_lines += [
     '',
     'Figures included:',
 ]
@@ -1117,14 +1331,16 @@ col_xlsx.download_button(
 
 col_zip.download_button(
     label=f'Everything, including {len(FIGURES)} figures (.zip)',
-    data=build_results_zip(workbook_bytes, workbook_name, FIGURES, readme_text),
+    data=build_results_zip(workbook_bytes, workbook_name, FIGURES, readme_text, products),
     file_name=f'gr_gapfill_{cal_model.lower()}_{file_tag}.zip',
     mime='application/zip',
     key='download_package',
     use_container_width=True,
 )
 
-st.caption(f'Four sheets: GapFilled in {sheet_units}, BehaviouralModels holding the '
+st.caption(f'The zip additionally holds {len(products)} CSV products and {len(FIGURES)} '
+           'figures. Workbook contents: four sheets, GapFilled in ' + sheet_units + ', '
+           'BehaviouralModels holding the '
            f'{cal["n_behavioural"]} retained {cal_model} parameter sets, EnsembleHydrographs '
            f'holding {len(cal["ensemble_export"])} members in {ensemble_units}, and Metadata '
            'recording the model, criterion, units, catchment area and calibration settings.')
