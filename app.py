@@ -4,6 +4,7 @@
 # Requires streamlit >= 1.30
 
 import gc
+import inspect
 import math
 from io import BytesIO
 
@@ -51,6 +52,34 @@ PARAM_DEFAULTS = {'X1': 500.0, 'X2': 0.0, 'X3': 100.0, 'X4': 2.0, 'X5': 0.0, 'X6
 
 GAP_METHODS = ['Behavioural Median', 'Endpoint Snapped Residuals',
                'Gaussian Process Residuals']
+
+
+# %% module compatibility check
+# app.py and the modules in core/ are updated together. If one is deployed
+# without the other, the failure surfaces as a bare TypeError at the call site,
+# and on Streamlit Cloud the message is redacted. This turns that into
+# something actionable.
+
+REQUIRED_ARGUMENTS = {
+    'core/calibration.py': (calibrate_gr, ['model', 'transform_kind', 'bounds', 'progress_callback']),
+    'core/models.py': (simulate, ['model']),
+    'core/metrics.py': (score, ['metric', 'transform_kind']),
+}
+
+_stale = []
+for _path, (_function, _expected) in REQUIRED_ARGUMENTS.items():
+    _present = inspect.signature(_function).parameters
+    _missing = [name for name in _expected if name not in _present]
+    if _missing:
+        _stale.append(f'{_path} is missing the argument(s) {", ".join(_missing)} '
+                      f'in {_function.__name__}()')
+
+if _stale:
+    st.error('The files in core/ are out of step with app.py. '
+             + ' '.join(_stale)
+             + '. Update the core modules to the versions that go with this app.py '
+               'and redeploy.')
+    st.stop()
 
 
 # %% unit conversion
