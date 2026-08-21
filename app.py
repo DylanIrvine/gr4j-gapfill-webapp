@@ -41,7 +41,7 @@ GR6J_MIN_WARMUP = 1095
 # the script in place when new source is deployed, so stored results can outlive
 # the code that wrote them. Increment whenever a key is added, renamed or
 # removed, and stale results are discarded rather than raising a KeyError.
-CAL_SCHEMA = 3
+CAL_SCHEMA = 4
 
 FLOW_UNITS = ['m3/s', 'ML/d', 'mm/d']
 UNIT_SUFFIX = {'m3/s': 'm3s', 'ML/d': 'MLd', 'mm/d': 'mmd'}
@@ -103,9 +103,9 @@ def fdc(q):
 
 def plot_hydrograph(dates, q_obs, series):
     fig, ax = new_fig(17, 8, [0.10, 0.15, 0.85, 0.75])
-    ax.plot(dates, q_obs, color=C_OBS, linewidth=1.5, label='Observed')
+    ax.plot(dates, q_obs, color=C_OBS, alpha=0.6, linewidth=1, label='Observed')
     for values, colour, label, lw in series:
-        ax.plot(dates, values, color=colour, alpha=0.6, linewidth=lw, label=label)
+        ax.plot(dates, values, color=colour, alpha=0.8, linewidth=lw, label=label)
     ax.set_xlabel('Date')
     ax.set_ylabel('Flow (mm/d)')
     ax.legend()
@@ -157,31 +157,58 @@ def run_gapfill(q_obs, q50, method):
     return gapfill_gaussian_process(q_obs, q50)
 
 
-def _excel_writer(buffer):
-    """Prefer xlsxwriter in constant memory mode.
+def _write_workbook_rowwise(sheets):
+    """Write the sheets one row at a time using xlsxwriter constant memory mode.
 
-    openpyxl instantiates a Python object per cell before saving, which for a
-    multi-decade daily record with 30 ensemble columns runs to hundreds of
-    thousands of objects. xlsxwriter with constant_memory streams each row to a
-    temporary file instead and keeps memory flat.
+    Row order is not optional here. In constant_memory mode xlsxwriter holds
+    exactly one row and flushes it the moment a different row is written.
+    pandas.to_excel writes a DataFrame COLUMN BY COLUMN, so under that mode
+    every row is flushed while the first column is being written and all later
+    columns are silently discarded. The result opens cleanly in Excel with only
+    column A populated, which is how the bug went unnoticed. Writing row by row
+    is what makes the mode safe, and it also keeps peak memory about ten times
+    lower than the pandas path and runs roughly twice as fast.
+
+    NaN becomes None so the cell is left blank rather than raising. Dates use
+    the workbook default format.
     """
-    try:
-        import xlsxwriter  # noqa: F401
-        return pd.ExcelWriter(buffer, engine='xlsxwriter',
-                              engine_kwargs={'options': {'constant_memory': True}})
-    except ImportError:
-        return pd.ExcelWriter(buffer, engine='openpyxl')
+    import xlsxwriter
+
+    buffer = BytesIO()
+    workbook = xlsxwriter.Workbook(buffer, {'constant_memory': True,
+                                            'default_date_format': 'yyyy-mm-dd'})
+
+    for name, df in sheets:
+        worksheet = workbook.add_worksheet(name)
+        worksheet.write_row(0, 0, [str(column) for column in df.columns])
+
+        for r, row in enumerate(df.itertuples(index=False, name=None), start=1):
+            worksheet.write_row(r, 0, [None if isinstance(v, float) and v != v else v
+                                       for v in row])
+
+    workbook.close()
+    return buffer.getvalue()
 
 
 @st.cache_data(show_spinner='Building workbook...', max_entries=2, ttl=CACHE_TTL)
 def build_workbook(output_df, behavioural_df, ensemble_df, metadata_df):
-    buffer = BytesIO()
-    with _excel_writer(buffer) as writer:
-        output_df.to_excel(writer, sheet_name='GapFilled', index=False)
-        behavioural_df.to_excel(writer, sheet_name='BehaviouralModels', index=False)
-        ensemble_df.to_excel(writer, sheet_name='EnsembleHydrographs', index=False)
-        metadata_df.to_excel(writer, sheet_name='Metadata', index=False)
-    return buffer.getvalue()
+    """Return workbook bytes. Bytes rather than a BytesIO, because a buffer held
+    across reruns can be left at EOF and download as an empty file."""
+    sheets = [('GapFilled', output_df),
+              ('BehaviouralModels', behavioural_df),
+              ('EnsembleHydrographs', ensemble_df),
+              ('Metadata', metadata_df)]
+
+    try:
+        return _write_workbook_rowwise(sheets)
+    except ImportError:
+        # openpyxl is correct but instantiates a Python object per cell, which
+        # on a multi-decade record runs to hundreds of thousands of objects
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            for name, df in sheets:
+                df.to_excel(writer, sheet_name=name, index=False)
+        return buffer.getvalue()
 
 
 # %% export table builders
@@ -237,8 +264,13 @@ def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, she
         ('Forcing interpolated', str(cal['forcing_interpolated'])),
     ]
 
+    bounds = cal['bounds']
+    items.append(('Parameter bounds', 'manually set' if cal['bounds_customised'] else 'defaults'))
+
     for name in PARAM_NAMES[model]:
-        items.append((f'{name} {PARAM_LABELS[name]}', f'{best[name]:.4f}'))
+        lo, hi = bounds[name]
+        items.append((f'{name} {PARAM_LABELS[name]}',
+                      f'{best[name]:.4f} (bounds {lo:g} to {hi:g})'))
 
     items += [
         ('P05, P50, P95', 'Percentiles across the behavioural ensemble, per day'),
@@ -510,7 +542,61 @@ with st.expander('Advanced Calibration Settings'):
                f'against {popsize * 4} for a four-parameter model. Expect GR6J to take around half '
                'again as long as GR4J for the same settings.')
 
-if st.button('Calibrate'):
+    st.markdown('**Parameter Bounds**')
+    st.caption('The defaults follow the ranges in general use for the GR models. Widening a bound '
+               'gives the optimiser more room to compensate for a data problem, and narrowing one '
+               'suppresses the bound-hit warning rather than fixing whatever caused it. Treat a '
+               'constrained run as a diagnostic to report alongside the unconstrained one, not as '
+               'a replacement for it.')
+
+    custom_bounds = st.checkbox('Set parameter bounds manually', value=False,
+                                key=f'custom_bounds_{model}')
+
+    param_bounds = {name: PARAM_BOUNDS[name] for name in param_names}
+    bounds_valid = True
+
+    if custom_bounds:
+        for name in param_names:
+            default_lo, default_hi = PARAM_BOUNDS[name]
+            st.write(f'{name} {PARAM_LABELS[name]}')
+            col_lo, col_hi = st.columns(2)
+
+            lo = col_lo.number_input('Lower', value=float(default_lo), format='%.4f',
+                                     key=f'bound_{model}_{name}_lo', label_visibility='collapsed')
+            hi = col_hi.number_input('Upper', value=float(default_hi), format='%.4f',
+                                     key=f'bound_{model}_{name}_hi', label_visibility='collapsed')
+
+            param_bounds[name] = (lo, hi)
+
+            if lo >= hi:
+                st.error(f'{name}: the lower bound must be below the upper bound.')
+                bounds_valid = False
+            elif name == 'X6' and lo <= 0:
+                st.error('X6: the lower bound must be greater than zero, since X6 divides the '
+                         'exponential store level.')
+                bounds_valid = False
+
+        widened = [name for name in param_names
+                   if param_bounds[name][0] < PARAM_BOUNDS[name][0]
+                   or param_bounds[name][1] > PARAM_BOUNDS[name][1]]
+        narrowed = [name for name in param_names
+                    if param_bounds[name][0] > PARAM_BOUNDS[name][0]
+                    or param_bounds[name][1] < PARAM_BOUNDS[name][1]]
+
+        if widened:
+            st.warning(f'Widened beyond the defaults: {", ".join(widened)}. A parameter that then '
+                       'settles far outside the usual range is more often compensating for '
+                       'something wrong in the forcing, the catchment area, or the model '
+                       'structure than describing the catchment.')
+        if narrowed:
+            st.info(f'Narrowed relative to the defaults: {", ".join(narrowed)}. If the objective '
+                    'score barely changes, the unconstrained value was not doing much work. If it '
+                    'collapses, the model needs that value to fit, which is itself the finding.')
+
+if not bounds_valid:
+    st.error('Fix the parameter bounds above before calibrating.')
+
+if st.button('Calibrate', disabled=not bounds_valid):
 
     cal_bar = st.progress(0.0, text=f'Calibrating {model}...')
     generation = {'n': 0}
@@ -523,7 +609,7 @@ if st.button('Calibrate'):
     cal_results = calibrate_gr(precip=rain, pet=pet, q_obs=q_obs_mmd, model=model,
                                warmup_days=warmup_days, metric=metric,
                                transform_kind=transform_kind, maxiter=maxiter, popsize=popsize,
-                               behavioural_delta=behavioural_delta,
+                               behavioural_delta=behavioural_delta, bounds=param_bounds,
                                progress_callback=report_progress)
 
     cal_bar.empty()
@@ -560,6 +646,8 @@ if st.button('Calibrate'):
         'metric': metric,
         'transform_kind': transform_kind,
         'epsilon': cal_results['epsilon'],
+        'bounds': cal_results['bounds'],
+        'bounds_customised': bool(custom_bounds),
         'warmup_days': warmup_days,
         'flow_units': flow_units,
         'area_km2': float(area_km2),
@@ -608,6 +696,7 @@ if cal['data_key'] != data_key:
 
 cal_model = cal['model']
 cal_params = PARAM_NAMES[cal_model]
+cal_bounds = cal['bounds']
 cal_dates = cal['dates']
 q_obs = cal['q_obs']
 cal_units = cal['flow_units']
@@ -628,12 +717,18 @@ st.subheader('Calibration Results')
 st.json(best_params)
 
 for name in cal_params:
-    lo, hi = PARAM_BOUNDS[name]
+    lo, hi = cal_bounds[name]
     tol = 0.001 * (hi - lo)
     if best_params[name] <= lo + tol:
-        st.warning(f'{name} reached lower bound')
+        st.warning(f'{name} reached its lower bound of {lo:g}. The optimiser wanted to go further '
+                   'and could not, so this value is set by the constraint rather than by the data.')
     if best_params[name] >= hi - tol:
-        st.warning(f'{name} reached upper bound')
+        st.warning(f'{name} reached its upper bound of {hi:g}. The optimiser wanted to go further '
+                   'and could not, so this value is set by the constraint rather than by the data.')
+
+if cal['bounds_customised']:
+    st.info('This calibration used manually set parameter bounds. They are recorded on the '
+            'Metadata sheet of the workbook.')
 
 # criteria across transformations, so the trade-off is visible
 st.subheader('Best Model Performance')
