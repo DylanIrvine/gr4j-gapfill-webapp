@@ -406,12 +406,40 @@ if uploaded_file is not None:
                 min_value=1
             )
 
+        if 'calibration_complete' not in st.session_state:
+        
+            st.session_state['calibration_complete'] = False
+        
         run_calibration = st.button(
             'Calibrate GR4J'
         )
         
         if run_calibration:
-
+        
+            st.session_state['calibration_complete'] = False
+        
+            with st.spinner(
+                'Calibrating GR4J and building behavioural ensemble...'
+            ):
+        
+                cal_results = calibrate_gr4j(
+                    precip=rain,
+                    pet=pet,
+                    q_obs=q_obs_mmd,
+                    warmup_days=warmup_days,
+                    objective=objective,
+                    maxiter=maxiter,
+                    popsize=popsize,
+                    behavioural_delta=behavioural_delta
+                )
+        
+            best_params = cal_results['best_params']
+            best_score = cal_results['best_score']
+            behavioural_df = cal_results['behavioural_df']
+        
+            st.session_state['best_params'] = best_params
+            st.session_state['best_score'] = best_score
+            st.session_state['behavioural_df'] = behavioural_df
             with st.spinner(
                 'Calibrating GR4J and building behavioural ensemble...'
             ):
@@ -492,7 +520,19 @@ if uploaded_file is not None:
                 95,
                 axis=0
             )
-       
+
+            st.session_state['calibration_complete'] = True
+            
+            st.session_state['q05'] = q05
+            st.session_state['q50'] = q50
+            st.session_state['q95'] = q95
+            
+            st.session_state['ensemble'] = ensemble
+            st.session_state['behavioural_df'] = behavioural_df
+            
+            st.session_state['best_params'] = best_params
+            st.session_state['best_score'] = best_score            
+            
             st.write(f'Behavioural Models Retained: {len(behavioural_df)}')
             st.write(f'Best {objective}: {best_score:.3f}')
             st.dataframe(behavioural_df.head(20))
