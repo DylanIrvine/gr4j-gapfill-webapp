@@ -913,17 +913,29 @@ if uploaded_file is not None:
                     pd.isna(q_obs_mmd).astype(int)
             })
         
+            # retain only the first 30 ensemble members for export
+            
+            n_export_models = min(
+                30,
+                ensemble.shape[0]
+            )
+            
+            ensemble_export = ensemble[
+                :n_export_models,
+                :
+            ]
+            
             ensemble_df = pd.DataFrame(
-                ensemble.T
+                ensemble_export.T
             )
             
             ensemble_df.columns = [
                 f'Model_{i+1:03d}'
                 for i in range(
-                    ensemble.shape[0]
+                    n_export_models
                 )
             ]
-            
+                        
             ensemble_df.insert(
                 0,
                 'Date',
