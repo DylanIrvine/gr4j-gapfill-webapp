@@ -824,7 +824,7 @@ if uploaded_file is not None:
                     color='black',
                     linestyle='--',
                     linewidth=1.5,
-                    label=f'Best = {best_lookup.2f}'
+                    label=f'{best_lookup[param]:.2f}'
                 )
             
                 ax.set_title(param)
