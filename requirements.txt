@@ -7,4 +7,3 @@ reportlab
 openpyxl
 scikit-learn
 xlsxwriter
-math
