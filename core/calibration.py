@@ -1,225 +1,136 @@
-#%%
+# core/calibration.py
+# Differential evolution calibration of GR4J, with a behavioural archive
+# assembled from the objective function evaluations.
+#
+# No module-level mutable state. Everything the calibration accumulates lives
+# inside calibrate_gr4j, so concurrent sessions on a deployed app cannot write
+# into each other's archive.
+
+# %%
 import numpy as np
 import pandas as pd
 from scipy.optimize import differential_evolution
 
 from core.gr4j import simulate
-from core.metrics import kge
-from core.metrics import nse
+from core.metrics import kge, nse
 
+# %% configuration
+PARAM_NAMES = ('X1', 'X2', 'X3', 'X4')
 
-#%%  List to store suitable models
-behavioural_archive = []
+PARAM_BOUNDS = {'X1': (1.0, 3000.0),
+                'X2': (-25.0, 5.0),
+                'X3': (1.0, 1000.0),
+                'X4': (0.5, 20.0)}
+
+PARAM_ROUNDING = {'X1': 1, 'X2': 2, 'X3': 1, 'X4': 2}
+
 MAX_BEHAVIOURAL_MODELS = 200
+MIN_FITTING_DAYS = 100
+PENALTY = 1e9
 
-#%%
-def objective_function(
-        params,
-        precip,
-        pet,
-        q_obs,
-        warmup_days=730,
-        objective='KGE'):
 
-    param_dict = {
-            'X1': params[0],
-            'X2': params[1],
-            'X3': params[2],
-            'X4': params[3]
-    }
-        
-    q_sim = simulate(
-            precip,
-            pet,
-            param_dict
-    )
+# %%
+def _objective_function(params, precip, pet, q_obs, warmup_days, objective, archive):
+    """Negative objective score, with every valid evaluation appended to archive."""
+    param_dict = dict(zip(PARAM_NAMES, [float(p) for p in params]))
 
-    mask = np.isfinite(q_obs)
+    q_sim = simulate(precip, pet, param_dict)
 
+    mask = np.isfinite(q_obs) & np.isfinite(q_sim)
     if warmup_days > 0:
-
         mask[:warmup_days] = False
 
-    if mask.sum() < 100:
+    if mask.sum() < MIN_FITTING_DAYS:
+        return PENALTY
 
-        return 1e9
-
-    q_obs_fit = q_obs[mask]
-    q_sim_fit = q_sim[mask]
-
-    if objective == 'KGE':
-
-        score = kge(
-            q_obs_fit,
-            q_sim_fit
-        )
-
-                
-    elif objective == 'NSE':
-
-        score = nse(
-            q_obs_fit,
-            q_sim_fit
-        )
-
+    if objective == 'NSE':
+        score = nse(q_obs[mask], q_sim[mask])
     else:
+        score = kge(q_obs[mask], q_sim[mask])
 
-        score = kge(
-            q_obs_fit,
-            q_sim_fit
-        )
+    if not np.isfinite(score):
+        return PENALTY
 
-    global behavioural_archive
-        
-    behavioural_archive.append({
-        'X1': params[0],
-        'X2': params[1],
-        'X3': params[2],
-        'X4': params[3],
-        'Score': score
-    })
-       
+    archive.append({**param_dict, 'Score': float(score)})
+
     return -score
 
 
-#%%
-def calibration_callback(
-        xk,
-        convergence):
-
-    global calibration_progress
-
-    calibration_progress['generation'] += 1
-
-    calibration_progress['params'] = {
-
-        'X1': xk[0],
-        'X2': xk[1],
-        'X3': xk[2],
-        'X4': xk[3]
-
-    }
-
-    calibration_progress['convergence'] = convergence
-
-    return False
+# %%
+def _empty_archive():
+    return pd.DataFrame(columns=list(PARAM_NAMES) + ['Score'])
 
 
-#%%
-def calibrate_gr4j(
-        precip,
-        pet,
-        q_obs,
-        warmup_days=730,
-        objective='KGE',
-        maxiter=25,
-        popsize=12,
-        behavioural_delta=0.05):
+# %%
+def calibrate_gr4j(precip, pet, q_obs, warmup_days=730, objective='KGE', maxiter=25,
+                   popsize=12, behavioural_delta=0.05, seed=1, progress_callback=None):
+    """Calibrate GR4J and return the best parameter set plus a behavioural archive.
 
-    bounds = [
+    Parameters
+    ----------
+    precip, pet : array-like, mm/d, must be complete
+    q_obs : array-like, mm/d, may contain NaN
+    warmup_days : int, days excluded from the objective at the start of the record
+    objective : 'KGE' or 'NSE'
+    maxiter, popsize : differential evolution settings
+    behavioural_delta : models scoring within this distance of the best are retained
+    seed : int, fixes the differential evolution random state for reproducibility
+    progress_callback : optional callable, called once per generation as
+        callback(params_dict, convergence)
 
-        (1.0, 3000.0),
+    Returns
+    -------
+    dict with keys best_params, best_score, behavioural_df
 
-        (-25.0, 5.0),
+    Note on interpretation
+    ---------------------
+    The behavioural set is drawn from the differential evolution trajectory, not
+    from a random sample of parameter space. The population concentrates near the
+    optimum as the search proceeds, so this is not a GLUE sample and the
+    resulting ensemble spread should be read as a local sensitivity band around
+    the optimum, not as a calibrated predictive uncertainty.
+    """
+    precip = np.asarray(precip, dtype=float)
+    pet = np.asarray(pet, dtype=float)
+    q_obs = np.asarray(q_obs, dtype=float)
 
-        (1.0, 1000.0),
+    archive = []
+    bounds = [PARAM_BOUNDS[name] for name in PARAM_NAMES]
 
-        (0.5, 20.0)
+    def _callback(xk, convergence=None):
+        progress_callback(dict(zip(PARAM_NAMES, [float(v) for v in xk])), convergence)
+        return False
 
-    ]
-
-    global calibration_progress
-
-    calibration_progress = {
-
-        'generation': 0,
-
-        'params': None,
-
-        'convergence': np.nan
-
-    }
-
-    global behavioural_archive
-        
-    behavioural_archive = []
-                
     result = differential_evolution(
-
-        objective_function,
-
+        _objective_function,
         bounds=bounds,
-
-        args=(
-
-            precip,
-
-            pet,
-
-            q_obs,
-
-            warmup_days,
-
-            objective
-
-        ),
-
+        args=(precip, pet, q_obs, warmup_days, objective, archive),
         maxiter=maxiter,
-
         popsize=popsize,
-
-        seed=1,
-
-        callback=calibration_callback
-
+        seed=seed,
+        callback=_callback if progress_callback is not None else None,
     )
 
-    best_score = -result.fun
+    best_score = float(-result.fun)
+    best_params = dict(zip(PARAM_NAMES, [float(v) for v in result.x]))
+    best_params['ObjectiveValue'] = best_score
 
-    archive_df = pd.DataFrame(behavioural_archive)
+    if len(archive) == 0:
+        return {'best_params': best_params, 'best_score': best_score,
+                'behavioural_df': _empty_archive()}
 
+    archive_df = pd.DataFrame(archive)
     archive_df = archive_df[np.isfinite(archive_df['Score'])]
+    archive_df = archive_df.sort_values('Score', ascending=False)
 
-    archive_df = archive_df.drop_duplicates()
+    behavioural_df = archive_df[archive_df['Score'] >= best_score - behavioural_delta].copy()
 
-    archive_df = archive_df[np.isfinite(archive_df['Score'])]
-        
-    archive_df = archive_df.drop_duplicates()
-        
-    archive_df = archive_df.sort_values('Score',  ascending=False)                
+    # round first, so numerically identical parameter sets collapse to one entry
+    for name, decimals in PARAM_ROUNDING.items():
+        behavioural_df[name] = behavioural_df[name].round(decimals)
 
-    behavioural_df = archive_df[archive_df['Score'] >= best_score - behavioural_delta]
-        
-    behavioural_df = behavioural_df.sort_values('Score',ascending=False)
+    behavioural_df = behavioural_df.drop_duplicates(subset=list(PARAM_NAMES))
+    behavioural_df = behavioural_df.head(MAX_BEHAVIOURAL_MODELS).reset_index(drop=True)
 
-    # Round parameters to remove numerical duplicates
-    behavioural_df['X1'] = behavioural_df['X1'].round(1)
-    behavioural_df['X2'] = behavioural_df['X2'].round(2)
-    behavioural_df['X3'] = behavioural_df['X3'].round(1)
-    behavioural_df['X4'] = behavioural_df['X4'].round(2)
-
-    # Remove duplicate parameter combinations
-    behavioural_df = behavioural_df.drop_duplicates(subset=['X1', 'X2', 'X3', 'X4'])
-
-    behavioural_df = behavioural_df.head(MAX_BEHAVIOURAL_MODELS) 
-                
-    best_params = {
-
-        'X1': result.x[0],
-
-        'X2': result.x[1],
-
-        'X3': result.x[2],
-
-        'X4': result.x[3],
-
-        'ObjectiveValue': -result.fun
-
-    }
-
-    return {
-        'best_params': best_params,
-        'best_score': best_score,
-        'behavioural_df': behavioural_df
-    }
-
+    return {'best_params': best_params, 'best_score': best_score,
+            'behavioural_df': behavioural_df}
