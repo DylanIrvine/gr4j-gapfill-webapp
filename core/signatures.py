@@ -180,6 +180,9 @@ def annual_percentiles(frame, start_month=1):
                      'Q90_MLd': float(np.percentile(q, 10)),
                      'PercentFilled': 100.0 * float(group['Filled'].mean())})
 
+    if not rows:
+        return pd.DataFrame()
+
     return pd.DataFrame(rows).sort_values('WaterYear').reset_index(drop=True)
 
 
@@ -197,6 +200,9 @@ def annual_maximum(frame, start_month=1):
                      'Date': peak['Date'],
                      'WasFilled': int(peak['Filled']),
                      'PercentFilled': 100.0 * float(group['Filled'].mean())})
+
+    if not rows:
+        return pd.DataFrame()
 
     return pd.DataFrame(rows).sort_values('WaterYear').reset_index(drop=True)
 
@@ -220,6 +226,9 @@ def annual_baseflow(frame, start_month=1):
                      'TotalFlow_GL': total / 1000.0,
                      'BFI': base / total if total > 0 else np.nan,
                      'PercentFilled': 100.0 * float(group['Filled'].mean())})
+
+    if not rows:
+        return pd.DataFrame()
 
     return pd.DataFrame(rows).sort_values('WaterYear').reset_index(drop=True)
 
@@ -247,6 +256,9 @@ def annual_cease_to_flow(frame, start_month=1):
                      'ObservedCeaseToFlowDays': int((ctf & ~filled).sum()),
                      'ModelledCeaseToFlowDays': int((ctf & filled).sum()),
                      'PercentFilled': 100.0 * float(filled.mean())})
+
+    if not rows:
+        return pd.DataFrame()
 
     return pd.DataFrame(rows).sort_values('WaterYear').reset_index(drop=True)
 
