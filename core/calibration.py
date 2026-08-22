@@ -17,6 +17,11 @@ from core.metrics import score, composite_score, epsilon_from_obs
 
 # %% configuration
 MAX_BEHAVIOURAL_MODELS = 200
+
+# Minimum width of the local sampling box along any one parameter, as a
+# fraction of that parameter's full range. Stops the sample inheriting a
+# collapse from the search.
+MIN_REFINE_SPAN = 0.03
 MIN_FITTING_DAYS = 100
 PENALTY = 1e9
 
@@ -208,14 +213,32 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
             low, high = float(values.min()), float(values.max())
             span = high - low
 
-            # a parameter the search never varied gets a small default width,
-            # otherwise the hypercube would be degenerate along that axis
-            if span <= 0:
-                span = 0.02 * (bounds[name][1] - bounds[name][0])
+            # A parameter the search collapsed onto, typically because it ran
+            # into a bound, has a spread near zero. Taking the box straight from
+            # that spread makes the hypercube degenerate along that axis: every
+            # sampled point gets the same value and the histogram becomes a
+            # single bar. The sample would then be faithfully reporting the
+            # search's collapse rather than testing it. A minimum width forces
+            # the sample to explore the parameter regardless of what the search
+            # did, which is the whole reason for sampling in the first place.
+            minimum_span = MIN_REFINE_SPAN * (bounds[name][1] - bounds[name][0])
+            span = max(span, minimum_span)
 
-            margin = refine_scale * span
-            lower[i] = max(bounds[name][0], low - margin)
-            upper[i] = min(bounds[name][1], high + margin)
+            centre = 0.5 * (low + high)
+            half_width = 0.5 * span + refine_scale * span
+
+            lower[i] = max(bounds[name][0], centre - half_width)
+            upper[i] = min(bounds[name][1], centre + half_width)
+
+            # a bound-limited parameter still needs somewhere to go, so push the
+            # box inward from the bound rather than collapsing against it
+            if upper[i] - lower[i] < minimum_span:
+                if lower[i] <= bounds[name][0]:
+                    upper[i] = min(bounds[name][1], bounds[name][0] + minimum_span)
+                    lower[i] = bounds[name][0]
+                else:
+                    lower[i] = max(bounds[name][0], bounds[name][1] - minimum_span)
+                    upper[i] = bounds[name][1]
 
             if upper[i] <= lower[i]:
                 lower[i], upper[i] = bounds[name]
