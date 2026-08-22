@@ -496,3 +496,72 @@ def whole_record_indices(dates, q_mmd, rain_mmd=None):
                           float(flow.mean() / rain.mean())))
 
     return pd.DataFrame(items, columns=['Index', 'Value'])
+
+
+# %% annual regime indices
+def annual_regime_indices(dates, q, water_year_labels, complete_years):
+    """Flashiness and variability per water year.
+
+    Reported annually rather than only for the whole record, because a trend in
+    flashiness is a more direct signal of catchment change than a trend in
+    annual volume, and because a single whole-record value hides the years in
+    which the metric was carried by gap filled data.
+    """
+    dates = pd.DatetimeIndex(dates)
+    frame = pd.DataFrame({'Date': dates, 'Q': np.asarray(q, dtype=float),
+                          'WaterYear': water_year_labels})
+    frame = frame[frame['WaterYear'].isin(complete_years)]
+
+    rows = []
+    for year, group in frame.groupby('WaterYear'):
+        values = group['Q'].to_numpy()
+        fdc = fdc_indices(values)
+        rows.append({'WaterYear': int(year),
+                     'RichardsBakerIndex': richards_baker_index(values),
+                     'CoefficientOfVariation': coefficient_of_variation(values),
+                     'FDCSlope': fdc['fdc_slope'],
+                     'ZeroFlowFraction': fdc['zero_flow_fraction'],
+                     'MeanFlow_mmd': float(np.mean(values))})
+
+    if not rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(rows).sort_values('WaterYear').reset_index(drop=True)
+
+
+def rolling_colwell(dates, q, water_year_labels, complete_years, window=15):
+    """Colwell indices computed on a moving window of water years.
+
+    A single whole-record value cannot show whether a regime is becoming more or
+    less predictable. Running the decomposition over a moving window does, and
+    separating constancy from contingency shows which of the two is moving: a
+    river losing contingency is losing its seasonal signal, which is a different
+    problem from one losing constancy.
+    """
+    years = sorted(int(y) for y in complete_years)
+    if len(years) < window + 2:
+        return pd.DataFrame()
+
+    dates = pd.DatetimeIndex(dates)
+    frame = pd.DataFrame({'Date': dates, 'Q': np.asarray(q, dtype=float),
+                          'WaterYear': water_year_labels})
+
+    rows = []
+    for i in range(len(years) - window + 1):
+        block = years[i:i + window]
+        subset = frame[frame['WaterYear'].isin(block)]
+        if subset.empty:
+            continue
+
+        result = colwell_indices(subset['Date'], subset['Q'].to_numpy())
+        rows.append({'CentreWaterYear': int(block[len(block) // 2]),
+                     'StartWaterYear': int(block[0]),
+                     'EndWaterYear': int(block[-1]),
+                     'Predictability': result['predictability'],
+                     'Constancy': result['constancy'],
+                     'Contingency': result['contingency']})
+
+    if not rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(rows)
