@@ -32,23 +32,39 @@ CM = 1.0 / 2.54
 
 # %%
 def _month_ticks(start_month, n_days=366):
-    """Tick positions and labels at the first of each month of the water year."""
+    """Tick positions and labels at the first of each month of the water year.
+
+    Month advance is a simple modular increment. An earlier version had a
+    conditional here that sent January back to December, so the labels
+    oscillated Dec, Jan, Dec, Jan from the fourth tick onward.
+    """
     positions, labels = [], []
     day = 1
-    month = start_month
+    month = int(start_month)
+
     for _ in range(12):
         if day > n_days:
             break
         positions.append(day)
         labels.append(calendar.month_abbr[month])
-        day += calendar.monthrange(2001 if month != 2 else 2004, month)[1]
-        month = 12 if month == 1 else month - 1 if False else (month % 12) + 1
+        # 2001 is not a leap year, so a water year of 365 days lines up
+        day += calendar.monthrange(2001, month)[1]
+        month = (month % 12) + 1
+
     return positions, labels
 
 
 def _figure(width_cm, height_cm, rect):
     fig = plt.figure(figsize=(width_cm * CM, height_cm * CM))
-    return fig, fig.add_axes(rect)
+    ax = fig.add_axes(rect)
+    # ticks pointing both ways, and no top or right spine, so annotations
+    # placed outside the axes are not crossed by a frame line
+    ax.tick_params(axis='both', direction='inout', width=0.5, length=4)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(0.5)
+    ax.spines['bottom'].set_linewidth(0.5)
+    return fig, ax
 
 
 # %%
@@ -87,7 +103,7 @@ def cumulative_spaghetti(wide, start_month=1, ylabel='Cumulative rainfall (mm)',
             series = wide[year].dropna()
             if series.empty:
                 continue
-            ax.annotate(f'{series.iloc[-1]:,.0f} mm\n({year}-{str(year + 1)[-2:]})',
+            ax.annotate(f'{series.iloc[-1]:.0f} mm\n({year}-{str(year + 1)[-2:]})',
                         xy=(series.index[-1], series.iloc[-1]),
                         xytext=(6, 0), textcoords='offset points',
                         color=colour, fontsize=8, va='center', ha='left')
