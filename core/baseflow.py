@@ -241,3 +241,122 @@ def cease_to_flow(q, threshold=0.0):
     """
     q = _as_float(q)
     return np.isfinite(q) & (q <= threshold)
+
+
+# %% recession analysis
+RECESSION_BINS = 20
+RECESSION_ENVELOPE_QUANTILE = 0.05
+
+
+def recession_analysis(q, min_length=RECESSION_MIN_LENGTH, skip_days=RECESSION_SKIP_DAYS,
+                       min_flow=RECESSION_MIN_FLOW, n_bins=RECESSION_BINS,
+                       envelope_quantile=RECESSION_ENVELOPE_QUANTILE):
+    """Brutsaert and Nieber recession analysis, -dQ/dt against Q.
+
+    Plotting the rate of recession against the flow at which it occurs collapses
+    every recession in the record onto one relationship, -dQ/dt = a Q^b. The
+    lower envelope of that cloud is taken to represent drainage from storage
+    with no residual quickflow and no evapotranspiration, so its slope and
+    intercept are an aquifer drainage signature rather than an event property.
+
+    The exponent b is the diagnostic. b close to 1 is a linear reservoir, which
+    is the assumption behind an exponential recession and behind the constant
+    filter coefficient used in Lyne and Hollick. b near 1.5 is the Boussinesq
+    late-time solution for a horizontal unconfined aquifer. b near 3 is the
+    early-time solution. A catchment whose b differs markedly from 1 is telling
+    you that a single recession constant is a poor description of it, which is
+    directly relevant to whether the derived alpha means anything.
+
+    When b is close to 1, the equivalent daily recession ratio is exp(-a), which
+    is directly comparable with the filter coefficient.
+
+    Returns
+    -------
+    dict with a, b, alpha_equivalent, n_points, r_squared, and the point cloud
+    (q_mid, dqdt) plus the fitted envelope for plotting.
+    """
+    q = np.asarray(q, dtype=float)
+
+    usable = np.isfinite(q) & (q > min_flow)
+    falling = np.zeros(len(q), dtype=bool)
+    falling[1:] = usable[1:] & usable[:-1] & (q[1:] < q[:-1])
+
+    transitions = np.diff(np.concatenate(([0], falling.astype(int), [0])))
+    starts = np.where(transitions == 1)[0]
+    ends = np.where(transitions == -1)[0] - 1
+
+    q_mid, dqdt = [], []
+    n_segments = 0
+
+    for start, end in zip(starts, ends):
+        if (end - start + 1) < min_length:
+            continue
+
+        n_segments += 1
+        first = start + skip_days
+        if first > end:
+            continue
+
+        idx = np.arange(first, end + 1)
+        q_mid.append(0.5 * (q[idx] + q[idx - 1]))
+        dqdt.append(q[idx - 1] - q[idx])          # positive, since flow is falling
+
+    if not q_mid:
+        return {'a': np.nan, 'b': np.nan, 'alpha_equivalent': np.nan,
+                'n_points': 0, 'n_segments': n_segments, 'r_squared': np.nan,
+                'q_mid': np.array([]), 'dqdt': np.array([]),
+                'envelope_q': np.array([]), 'envelope_dqdt': np.array([])}
+
+    q_mid = np.concatenate(q_mid)
+    dqdt = np.concatenate(dqdt)
+
+    valid = (q_mid > 0) & (dqdt > 0) & np.isfinite(q_mid) & np.isfinite(dqdt)
+    q_mid, dqdt = q_mid[valid], dqdt[valid]
+
+    if q_mid.size < 20:
+        return {'a': np.nan, 'b': np.nan, 'alpha_equivalent': np.nan,
+                'n_points': int(q_mid.size), 'n_segments': n_segments,
+                'r_squared': np.nan, 'q_mid': q_mid, 'dqdt': dqdt,
+                'envelope_q': np.array([]), 'envelope_dqdt': np.array([])}
+
+    # lower envelope: a low quantile of dQ/dt within logarithmic flow bins
+    edges = np.geomspace(q_mid.min(), q_mid.max(), n_bins + 1)
+    bin_index = np.clip(np.digitize(q_mid, edges) - 1, 0, n_bins - 1)
+
+    envelope_q, envelope_dqdt = [], []
+    for b_index in range(n_bins):
+        selection = bin_index == b_index
+        if selection.sum() < 5:
+            continue
+        envelope_q.append(float(np.median(q_mid[selection])))
+        envelope_dqdt.append(float(np.quantile(dqdt[selection], envelope_quantile)))
+
+    envelope_q = np.array(envelope_q)
+    envelope_dqdt = np.array(envelope_dqdt)
+
+    positive = envelope_dqdt > 0
+    envelope_q, envelope_dqdt = envelope_q[positive], envelope_dqdt[positive]
+
+    if envelope_q.size < 4:
+        return {'a': np.nan, 'b': np.nan, 'alpha_equivalent': np.nan,
+                'n_points': int(q_mid.size), 'n_segments': n_segments,
+                'r_squared': np.nan, 'q_mid': q_mid, 'dqdt': dqdt,
+                'envelope_q': envelope_q, 'envelope_dqdt': envelope_dqdt}
+
+    log_q = np.log(envelope_q)
+    log_d = np.log(envelope_dqdt)
+    slope, intercept = np.polyfit(log_q, log_d, 1)
+
+    predicted = slope * log_q + intercept
+    residual = log_d - predicted
+    total = log_d - log_d.mean()
+    r_squared = float(1.0 - np.sum(residual ** 2) / np.sum(total ** 2)) if np.any(total) else np.nan
+
+    a = float(np.exp(intercept))
+    b = float(slope)
+    alpha_equivalent = float(np.exp(-a)) if abs(b - 1.0) < 0.25 else np.nan
+
+    return {'a': a, 'b': b, 'alpha_equivalent': alpha_equivalent,
+            'n_points': int(q_mid.size), 'n_segments': n_segments,
+            'r_squared': r_squared, 'q_mid': q_mid, 'dqdt': dqdt,
+            'envelope_q': envelope_q, 'envelope_dqdt': envelope_dqdt}
