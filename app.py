@@ -27,7 +27,16 @@ from core.baseflow import (lyne_hollick, recession_alpha, cease_to_flow,
                            DEFAULT_ALPHA, DEFAULT_PASSES, DEFAULT_REFLECT,
                            RECESSION_MIN_LENGTH, RECESSION_SKIP_DAYS,
                            RECESSION_QUANTILE)
-from core.signatures import (build_daily_frame, build_all_products, MONTH_NAMES)
+from core.signatures import (build_daily_frame, build_all_products, MONTH_NAMES,
+                             water_year, _complete_periods, _water_year_span)
+from core.indices import (cease_to_flow_spells, annual_cease_to_flow_spells,
+                          colwell_indices, half_flow_date, seasonality, fdc_indices,
+                          streamflow_elasticity, anomalous_accumulation_onset,
+                          onset_lag, whole_record_indices, trend_table)
+from core.rainfall import (annual_rainfall, spi, cumulative_by_water_year,
+                           annual_anomaly_series)
+from core.plots import (cumulative_spaghetti, anomaly_bars, rainfall_runoff_cumulative)
+from core.baseflow import recession_analysis
 
 # %% plot settings
 plt.style.use('default')
@@ -43,6 +52,7 @@ C_PARAM = ['#FCB711', '#F37021', '#CC004C', '#6460AA', '#0DB14B', '#2BA9E0']
 MAX_EXPORT_MODELS = 30
 MAX_HISTORY = 20
 C_BASE = '#2BA9E0'
+CREDIT = 'Produced with the GR gap filling tool, Charles Darwin University'
 LONG_FORCING_GAP = 5
 CACHE_TTL = 3600
 GR6J_MIN_WARMUP = 1095
@@ -235,7 +245,7 @@ def plot_parameter_pairs(behavioural_df, names, best_params):
                         hspace=0.12, wspace=0.12)
 
     if n >= 3 and points is not None:
-        cax = fig.add_axes([0.86, 0.42, 0.02, 0.55])
+        cax = fig.add_axes([0.60, 0.62, 0.02, 0.30])
         bar = fig.colorbar(points, cax=cax)
         bar.set_label('Score', fontsize=8)
         bar.ax.tick_params(labelsize=6)
@@ -266,6 +276,11 @@ def run_gapfill(q_obs, q50, method):
 @st.cache_data(show_spinner='Separating baseflow...', max_entries=3, ttl=CACHE_TTL)
 def run_baseflow(q, alpha, passes, n_reflect):
     return lyne_hollick(q, alpha=alpha, passes=passes, n_reflect=n_reflect)
+
+
+@st.cache_data(show_spinner=False, max_entries=3, ttl=CACHE_TTL)
+def run_recession_analysis(q, min_length, skip_days):
+    return recession_analysis(q, min_length=min_length, skip_days=skip_days)
 
 
 @st.cache_data(show_spinner=False, max_entries=3, ttl=CACHE_TTL)
@@ -1201,6 +1216,266 @@ else:
 
     with st.expander('Annual Summary Table'):
         st.dataframe(annual, hide_index=True)
+
+# %% 6b. signature indices and long-term analysis
+section_break()
+st.subheader('Signature Indices and Long-Term Analysis')
+
+complete_years = _complete_periods(daily_frame, 'WaterYear',
+                                   lambda y: _water_year_span(y, wy_start_month))
+wy_labels = daily_frame['WaterYear'].to_numpy()
+
+col_ref1, col_ref2 = st.columns(2)
+
+if complete_years:
+    year_low, year_high = int(min(complete_years)), int(max(complete_years))
+else:
+    year_low = year_high = int(pd.DatetimeIndex(cal_dates).year.min())
+
+reference_start = col_ref1.number_input('Reference Period Start (water year)',
+                                        value=year_low, min_value=year_low,
+                                        max_value=year_high, step=1)
+reference_end = col_ref2.number_input('Reference Period End (water year)',
+                                      value=year_high, min_value=year_low,
+                                      max_value=year_high, step=1)
+
+if reference_start > reference_end:
+    st.error('The reference period start must not be after the end.')
+    reference_start, reference_end = year_low, year_high
+
+st.caption('Anomalies are computed against the mean of this period rather than the whole '
+           'record, because a mean taken over a record containing a trend is not a stable '
+           'baseline, and because comparability with published anomalies requires matching '
+           'their reference period.')
+
+# --- whole record indices ---
+record_indices = whole_record_indices(cal_dates, q_gapfilled, rain)
+products['record_indices'] = record_indices
+
+st.markdown('**Whole-record signatures**')
+idx_cols = st.columns(4)
+lookup = dict(zip(record_indices['Index'], record_indices['Value']))
+idx_cols[0].metric('Colwell predictability', f'{lookup.get("Colwell predictability (P)", float("nan")):.3f}')
+idx_cols[1].metric('Constancy / contingency',
+                   f'{lookup.get("Colwell constancy (C)", float("nan")):.2f} / '
+                   f'{lookup.get("Colwell contingency (M)", float("nan")):.2f}')
+idx_cols[2].metric('Seasonality strength', f'{lookup.get("Seasonality strength (0-1)", float("nan")):.3f}')
+idx_cols[3].metric('Flashiness (RBI)', f'{lookup.get("Richards-Baker flashiness index", float("nan")):.3f}')
+
+with st.expander('What these mean'):
+    st.write('**Colwell predictability** is how well the flow can be anticipated from the date '
+             'alone, and it splits into **constancy**, meaning the flow is always much the same, '
+             'and **contingency**, meaning the flow is reliably different at different times of '
+             'year. Predictability is the sum of the two. Northern Australian rivers are the '
+             'archetype of low constancy and high contingency: wildly variable, but variable on '
+             'a schedule. A river with high constancy instead is spring fed.')
+    st.write('**Seasonality strength** runs from 0, flow spread evenly through the year, to 1, '
+             'all flow arriving on one day. **Flashiness** is the path length of the hydrograph '
+             'divided by total flow, so a smoothly interpolated gap lowers it, which is one '
+             'reason to read it against the percentage filled.')
+    st.dataframe(record_indices, hide_index=True)
+
+# --- recession analysis ---
+st.markdown('**Recession analysis**')
+recession_fit = run_recession_analysis(q_gapfilled, rec_min_length, rec_skip)
+
+if np.isfinite(recession_fit['b']):
+    rec_cols = st.columns(3)
+    rec_cols[0].metric('Exponent b', f'{recession_fit["b"]:.3f}')
+    rec_cols[1].metric('Coefficient a', f'{recession_fit["a"]:.4f}')
+    rec_cols[2].metric('Envelope fit R2', f'{recession_fit["r_squared"]:.3f}')
+
+    fig_rec, ax = new_fig(10, 9, [0.16, 0.14, 0.80, 0.80])
+    ax.scatter(recession_fit['q_mid'], recession_fit['dqdt'], s=4, lw=0, alpha=0.18,
+               color=C_CAL)
+    ax.plot(recession_fit['envelope_q'], recession_fit['envelope_dqdt'], 'o',
+            color='black', markersize=4, label='Lower envelope')
+    fitted = recession_fit['a'] * recession_fit['envelope_q'] ** recession_fit['b']
+    ax.plot(recession_fit['envelope_q'], fitted, '-', color='#D0245C',
+            linewidth=1.6,
+            label=f'-dQ/dt = {recession_fit["a"]:.3g} Q$^{{{recession_fit["b"]:.2f}}}$')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('Q (mm/d)')
+    ax.set_ylabel('-dQ/dt (mm/d per day)')
+    ax.legend(fontsize=7)
+    show(fig_rec, 'recession_analysis')
+
+    if recession_fit['b'] < 0.75:
+        st.info(f'b = {recession_fit["b"]:.2f}, well below 1. Recession slows faster than a '
+                'linear reservoir would, which usually indicates more than one drainage '
+                'process or a store that is still being recharged during the falling limb.')
+    elif recession_fit['b'] > 1.75:
+        st.info(f'b = {recession_fit["b"]:.2f}. Values near 1.5 correspond to the Boussinesq '
+                'late-time solution for a horizontal unconfined aquifer and near 3 to the '
+                'early-time solution, so a high b points to shallow aquifer drainage rather '
+                'than a simple linear store.')
+    else:
+        st.info(f'b = {recession_fit["b"]:.2f}, close to 1, which is a linear reservoir. That '
+                'is the assumption behind an exponential recession and behind using a single '
+                'filter coefficient, so a constant alpha is defensible for this catchment.')
+else:
+    st.info('Too few usable recession segments were found for a Brutsaert and Nieber fit.')
+
+# --- annual signature series ---
+if complete_years:
+    ctf_flags = daily_frame['CeaseToFlow'].to_numpy() if 'CeaseToFlow' in daily_frame else None
+
+    spells = cease_to_flow_spells(cal_dates, ctf_flags, np.isnan(q_obs))
+    if not spells.empty:
+        products['cease_to_flow_spells'] = spells
+        annual_spells = annual_cease_to_flow_spells(
+            spells, lambda dt: water_year([dt], wy_start_month)[0], complete_years)
+        if not annual_spells.empty:
+            products['annual_cease_to_flow_spells'] = annual_spells
+            st.markdown('**Cease-to-flow spells**')
+            st.write(f'{len(spells)} no-flow spells in the record. Longest '
+                     f'{int(spells["LengthDays"].max())} days. A water year with its no-flow '
+                     'days in one block is a very different river from one with the same total '
+                     'spread across many short events, which is why the spell length matters '
+                     'more than the annual count for refuge persistence and fish passage.')
+            st.dataframe(annual_spells.head(10), hide_index=True)
+
+    timing = half_flow_date(cal_dates, q_gapfilled, wy_labels, complete_years)
+    if not timing.empty:
+        products['annual_half_flow_date'] = timing
+
+    rain_onset = anomalous_accumulation_onset(cal_dates, rain, wy_labels, complete_years)
+    flow_onset = anomalous_accumulation_onset(cal_dates, q_gapfilled, wy_labels, complete_years)
+    lag = onset_lag(rain_onset, flow_onset)
+
+    if not rain_onset.empty:
+        products['annual_wet_season_rainfall'] = rain_onset
+    if not flow_onset.empty:
+        products['annual_wet_season_flow'] = flow_onset
+    onset_coverage = (len(rain_onset) / len(complete_years)) if complete_years else 0.0
+    if onset_coverage < 0.7:
+        st.warning(f'The wet season onset method resolved only {len(rain_onset)} of '
+                   f'{len(complete_years)} water years. That almost always means the water year '
+                   'start month is poorly chosen for this catchment: the method needs the wet '
+                   'season to sit inside the water year rather than straddle its boundary. Try '
+                   'setting the start month to a month in the middle of the dry season.')
+
+    if not lag.empty:
+        products['annual_onset_lag'] = lag
+        st.markdown('**Wet season onset**')
+        st.write(f'Mean lag between the rainfall wet season beginning and the flow responding: '
+                 f'**{lag["OnsetLagDays"].mean():.0f} days** (range {int(lag["OnsetLagDays"].min())} '
+                 f'to {int(lag["OnsetLagDays"].max())}). Onset is found by the anomalous '
+                 'accumulation method, which needs no threshold. This lag is a catchment storage '
+                 'signature: a deeply weathered or karstic catchment absorbs the first rains and '
+                 'responds late, a shallow or already wet one responds almost at once.')
+
+    rain_annual = annual_rainfall(cal_dates, rain, wy_labels, complete_years)
+    if not rain_annual.empty:
+        products['annual_rainfall'] = rain_annual
+
+        merged = annual.merge(rain_annual, on='WaterYear', how='inner')
+        if len(merged) >= 5:
+            flow_mm = merged['Flow_GL'].to_numpy() * 1000.0 / cal_area
+            elasticity = streamflow_elasticity(merged['Rainfall_mm'].to_numpy(), flow_mm)
+            merged['Runoff_mm'] = flow_mm
+            merged['RunoffCoefficient'] = flow_mm / merged['Rainfall_mm'].to_numpy()
+            products['annual_rainfall_runoff'] = merged[
+                ['WaterYear', 'Rainfall_mm', 'Runoff_mm', 'RunoffCoefficient']]
+
+            if np.isfinite(elasticity['elasticity']):
+                st.markdown('**Streamflow elasticity to rainfall**')
+                st.metric('Elasticity', f'{elasticity["elasticity"]:.2f}',
+                          help='Proportional change in runoff per proportional change in '
+                               'rainfall. A value of 2 means a 10 per cent rainfall decline '
+                               'produces a 20 per cent runoff decline.')
+                st.caption(f'Estimated non-parametrically over {elasticity["n_years"]} complete '
+                           'water years, after Sankarasubramanian et al. (2001). This is the '
+                           'number to carry into a climate projection.')
+
+    # --- trends ---
+    trend_inputs = annual.merge(rain_annual[['WaterYear', 'Rainfall_mm']],
+                                on='WaterYear', how='left') if not rain_annual.empty else annual
+    if 'annual_baseflow' in products:
+        trend_inputs = trend_inputs.merge(
+            products['annual_baseflow'][['WaterYear', 'Baseflow_GL', 'BFI']],
+            on='WaterYear', how='left')
+    if not timing.empty:
+        trend_inputs = trend_inputs.merge(timing[['WaterYear', 'DayOfWaterYear']],
+                                          on='WaterYear', how='left')
+
+    trends = trend_table(trend_inputs, 'WaterYear',
+                         ['Flow_GL', 'Rainfall_mm', 'Baseflow_GL', 'BFI', 'DayOfWaterYear'])
+    if not trends.empty:
+        products['trends'] = trends
+        st.markdown('**Trends (Mann-Kendall with Sen slope)**')
+        st.dataframe(trends, hide_index=True)
+        st.caption('Non-parametric, so no distributional assumption is made. The Sen slope is '
+                   'the estimate to report alongside the p value. DayOfWaterYear is the timing '
+                   'of the half-flow date, which often moves before annual totals do.')
+
+    # --- SPI ---
+    spi_table = spi(cal_dates, rain)
+    if not spi_table.empty:
+        products['spi'] = spi_table
+
+    # --- showcase plots ---
+    st.markdown('**Long-term rainfall and flow**')
+
+    rain_wide = cumulative_by_water_year(cal_dates, rain, wy_labels, complete_years)
+    flow_wide = cumulative_by_water_year(cal_dates, q_gapfilled, wy_labels, complete_years)
+
+    fig_rain_cum = cumulative_spaghetti(
+        rain_wide, start_month=wy_start_month, ylabel='Cumulative rainfall (mm)',
+        title='Catchment rainfall by water year',
+        subtitle=f'Water year starts in {MONTH_NAMES[wy_start_month - 1]}', credit=CREDIT)
+    if fig_rain_cum is not None:
+        show(fig_rain_cum, 'cumulative_rainfall')
+
+    fig_flow_cum = cumulative_spaghetti(
+        flow_wide, start_month=wy_start_month, ylabel='Cumulative runoff (mm)',
+        title='Catchment runoff by water year',
+        subtitle=f'Water year starts in {MONTH_NAMES[wy_start_month - 1]}', credit=CREDIT)
+    if fig_flow_cum is not None:
+        show(fig_flow_cum, 'cumulative_runoff')
+
+    st.caption('Blue is the wettest water year on record, red the driest, black the most recent '
+               'complete year, and grey every other year.')
+
+    if not rain_annual.empty:
+        rain_anom = annual_anomaly_series(rain_annual, 'WaterYear', 'Rainfall_mm',
+                                          int(reference_start), int(reference_end),
+                                          moving_windows=(10,))
+        products['annual_rainfall_anomaly'] = rain_anom
+        fig_rain_anom = anomaly_bars(
+            rain_anom, 'WaterYear', 'Anomaly', int(reference_start), int(reference_end),
+            moving_column='Anomaly_MA10', ylabel='Rainfall anomaly (mm)',
+            title='Water year rainfall anomaly',
+            subtitle=f'Reference period {int(reference_start)} to {int(reference_end)}',
+            credit=CREDIT)
+        if fig_rain_anom is not None:
+            show(fig_rain_anom, 'rainfall_anomaly')
+
+    flow_anom = annual_anomaly_series(annual, 'WaterYear', 'Flow_GL',
+                                      int(reference_start), int(reference_end),
+                                      moving_windows=(10,))
+    products['annual_flow_anomaly'] = flow_anom
+    fig_flow_anom = anomaly_bars(
+        flow_anom, 'WaterYear', 'Anomaly', int(reference_start), int(reference_end),
+        moving_column='Anomaly_MA10', ylabel='Flow anomaly (GL)',
+        title='Water year flow anomaly',
+        subtitle=f'Reference period {int(reference_start)} to {int(reference_end)}',
+        credit=CREDIT)
+    if fig_flow_anom is not None:
+        show(fig_flow_anom, 'flow_anomaly')
+
+    # --- paired rainfall and runoff for the most recent complete year ---
+    most_recent = int(max(complete_years))
+    fig_paired = rainfall_runoff_cumulative(rain_wide, flow_wide, most_recent,
+                                            start_month=wy_start_month, credit=CREDIT)
+    if fig_paired is not None:
+        st.markdown('**Rainfall and runoff together**')
+        show(fig_paired, 'rainfall_runoff_paired')
+        st.caption('The vertical gap between the two curves is water that has fallen on the '
+                   'catchment and has not yet left it, so the shape of that gap through the year '
+                   'is the catchment storage behaviour drawn directly. Widening through the wet '
+                   'season is filling; a slow closing through the dry season is release.')
 
 st.write(f'**{len(products)} CSV products** are included in the download package: '
          + ', '.join(sorted(products)) + '.')
