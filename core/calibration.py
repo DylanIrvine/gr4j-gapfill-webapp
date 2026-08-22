@@ -10,6 +10,7 @@
 import numpy as np
 import pandas as pd
 from scipy.optimize import differential_evolution
+from scipy.stats import qmc
 
 from core.models import simulate, PARAM_NAMES, PARAM_BOUNDS, PARAM_ROUNDING
 from core.metrics import score, composite_score, epsilon_from_obs
@@ -52,9 +53,22 @@ def _objective_function(params, precip, pet, q_obs, warmup_days, metric,
 
 
 # %%
+def _behavioural_frame(rows, best_score, delta, names):
+    """Rows scoring within delta of the best, sorted best first, as a DataFrame."""
+    if not rows:
+        return pd.DataFrame(columns=list(names) + ['Score'])
+
+    frame = pd.DataFrame(rows)
+    frame = frame[np.isfinite(frame['Score'])]
+    frame = frame.sort_values('Score', ascending=False)
+    return frame[frame['Score'] >= best_score - delta].copy()
+
+
+# %%
 def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE',
                  transform_kind='none', composite_weight=None, maxiter=25, popsize=12,
-                 behavioural_delta=0.05, seed=1, bounds=None, progress_callback=None):
+                 behavioural_delta=0.05, seed=1, bounds=None, refine_sample=0,
+                 refine_scale=0.15, progress_callback=None):
     """Calibrate a GR model and return the best parameter set plus an archive.
 
     Parameters
@@ -82,6 +96,18 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
         compensate for data problems; narrowing one suppresses the bound-hit
         warning rather than fixing whatever caused it. Report a constrained run
         alongside the unconstrained one rather than in place of it.
+    refine_sample : int. When greater than zero, a Latin hypercube sample of this
+        many parameter sets is drawn from a box around the optimum after the
+        search converges, and the behavioural set is built from that sample
+        rather than from the search trajectory. This matters more than it looks.
+        The differential evolution archive is a record of where the optimiser
+        travelled, not a sample of anything, so density in it reflects where the
+        population happened to linger. A Latin hypercube over the local region
+        IS a sample, which makes the resulting spread defensible as a parameter
+        sensitivity analysis rather than an artefact of the search path.
+    refine_scale : float. Margin added to each side of the box, as a fraction of
+        the spread the search found for that parameter. The box itself comes from
+        the search, not from the bounds.
     progress_callback : optional callable, called once per generation as
         callback(params_dict, convergence)
 
@@ -157,18 +183,79 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
     best_params = dict(zip(names, [float(v) for v in result.x]))
     best_params['ObjectiveValue'] = best_score
 
+    # Local Latin hypercube refinement.
+    #
+    # The sampling box is taken from where the SEARCH found behavioural sets,
+    # expanded by a margin, rather than from a fixed fraction of the parameter
+    # bounds. A fixed fraction cannot work: 15 per cent of X1's range is 450 mm,
+    # so the box would span most of the plausible parameter space and almost
+    # nothing sampled in it would be behavioural. The division of labour is the
+    # point. Differential evolution is good at locating the behavioural region
+    # and bad at sampling it, because its density reflects the path taken. A
+    # Latin hypercube is the reverse. Using each for what it is good at gives a
+    # behavioural set that is an actual sample of an actual region.
+    sample_rows = []
+    sampled = False
+
+    trajectory_df = _behavioural_frame(archive, best_score, behavioural_delta, names)
+
+    if refine_sample and refine_sample > 0 and len(trajectory_df) >= 5:
+        lower = np.empty(len(names))
+        upper = np.empty(len(names))
+
+        for i, name in enumerate(names):
+            values = trajectory_df[name].to_numpy(dtype=float)
+            low, high = float(values.min()), float(values.max())
+            span = high - low
+
+            # a parameter the search never varied gets a small default width,
+            # otherwise the hypercube would be degenerate along that axis
+            if span <= 0:
+                span = 0.02 * (bounds[name][1] - bounds[name][0])
+
+            margin = refine_scale * span
+            lower[i] = max(bounds[name][0], low - margin)
+            upper[i] = min(bounds[name][1], high + margin)
+
+            if upper[i] <= lower[i]:
+                lower[i], upper[i] = bounds[name]
+
+        engine = qmc.LatinHypercube(d=len(names), seed=seed)
+        candidates = qmc.scale(engine.random(int(refine_sample)), lower, upper)
+
+        mark = len(archive)
+        for candidate in candidates:
+            _objective_function(candidate, precip, pet, q_obs, warmup_days, metric,
+                                transform_kind, composite_weight, epsilon, model,
+                                names, archive)
+        sample_rows = archive[mark:]
+
+        # the sample can find a better set than the polished optimum
+        for entry in sample_rows:
+            if entry['Score'] > best_score:
+                best_score = float(entry['Score'])
+                best_params = {name: float(entry[name]) for name in names}
+                best_params['ObjectiveValue'] = best_score
+
     if len(archive) == 0:
         empty = pd.DataFrame(columns=list(names) + ['Score'])
         return {'best_params': best_params, 'best_score': best_score,
                 'behavioural_df': empty, 'model': model, 'epsilon': epsilon,
                 'bounds': bounds, 'seed': int(seed),
-                'composite_weight': composite_weight}
+                'composite_weight': composite_weight,
+                'behavioural_source': 'differential evolution trajectory',
+                'n_sampled': 0, 'refine_scale': float(refine_scale)}
 
-    archive_df = pd.DataFrame(archive)
-    archive_df = archive_df[np.isfinite(archive_df['Score'])]
-    archive_df = archive_df.sort_values('Score', ascending=False)
+    # When a local sample was drawn, the behavioural set comes from the sample
+    # only. Mixing it with the search trajectory would reintroduce exactly the
+    # unsampled density the refinement exists to remove.
+    behavioural_df = _behavioural_frame(archive, best_score, behavioural_delta, names)
 
-    behavioural_df = archive_df[archive_df['Score'] >= best_score - behavioural_delta].copy()
+    if sample_rows:
+        sample_df = _behavioural_frame(sample_rows, best_score, behavioural_delta, names)
+        if len(sample_df) >= 10:
+            behavioural_df = sample_df
+            sampled = True
 
     # round first, so numerically identical parameter sets collapse to one entry
     for name in names:
@@ -180,7 +267,10 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
     return {'best_params': best_params, 'best_score': best_score,
             'behavioural_df': behavioural_df, 'model': model, 'epsilon': epsilon,
             'bounds': bounds, 'seed': int(seed),
-            'composite_weight': composite_weight}
+            'composite_weight': composite_weight,
+            'behavioural_source': 'local Latin hypercube sample' if sampled
+                                  else 'differential evolution trajectory',
+            'n_sampled': len(sample_rows), 'refine_scale': float(refine_scale)}
 
 
 # %% backwards compatible alias
