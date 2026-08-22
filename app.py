@@ -422,6 +422,7 @@ def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, she
         ('Calibration criterion', cal['criterion']),
         ('Random seed', str(cal['seed'])),
         ('Behavioural set source', cal['behavioural_source']),
+        ('Model implementation', 'numba compiled' if NUMBA_AVAILABLE else 'pure Python'),
         ('Local sample size', str(cal['n_sampled'])),
         ('Best criterion value', f"{cal['best_score']:.4f}"),
         ('Transform offset epsilon (mm/d)', f"{cal['epsilon']:.6g}"),
@@ -683,6 +684,16 @@ st.write('The objective function has two parts: the efficiency criterion, and th
          'will barely register. If low flows are what you care about, calibrate on a transformed '
          'series.')
 
+if NUMBA_AVAILABLE:
+    st.success('Model compiled with numba. Calibration takes seconds, so larger budgets and '
+               'local sampling of the behavioural set are cheap.')
+else:
+    st.warning('numba is not installed, so the model is running in pure Python. Results are '
+               'identical but roughly 40 times slower: a GR6J calibration that would take '
+               'seconds takes minutes. Add "numba" to requirements.txt to enable it. Local '
+               'sampling of the behavioural set defaults to off while it is absent, because '
+               'every sampled point is a full model run.')
+
 col1, col2 = st.columns(2)
 metric = col1.selectbox('Efficiency Criterion', METRICS)
 criterion_type = col2.selectbox('Criterion Type', ['Single transformation', 'Composite'])
@@ -733,10 +744,12 @@ with st.expander('Advanced Calibration Settings'):
     seed = int(st.number_input('Random Seed', value=1, min_value=0, step=1))
 
     st.markdown('**Behavioural set**')
-    refine = st.checkbox('Refine by local sampling', value=True,
-                         help='Recommended. See the note below.')
-    refine_sample = int(st.number_input('Local sample size', value=3000, min_value=0,
-                                        step=500, disabled=not refine))
+    refine = st.checkbox('Refine by local sampling', value=NUMBA_AVAILABLE,
+                         help='Recommended when the model is compiled. Each sampled point is a '
+                              'full model run, so without numba this is expensive.')
+    refine_sample = int(st.number_input('Local sample size',
+                                        value=3000 if NUMBA_AVAILABLE else 500,
+                                        min_value=0, step=500, disabled=not refine))
     refine_scale = st.slider('Sampling margin', min_value=0.0, max_value=0.5, value=0.10,
                              step=0.05, disabled=not refine)
     st.caption('Differential evolution is good at locating the behavioural region and bad at '
@@ -819,6 +832,16 @@ with st.expander('Advanced Calibration Settings'):
             st.info(f'Narrowed relative to the defaults: {", ".join(narrowed)}. If the objective '
                     'score barely changes, the unconstrained value was not doing much work. If it '
                     'collapses, the model needs that value to fit, which is itself the finding.')
+
+# rough cost estimate, so a long run is not a surprise
+_evals = popsize * len(param_names) * (maxiter + 1) + (refine_sample if refine else 0)
+_per_1000_days = 0.00015 if NUMBA_AVAILABLE else 0.0056     # seconds, measured
+_estimate = _evals * _per_1000_days * len(rain) / 1000.0
+
+st.caption(f'About {_evals:,} model evaluations, roughly '
+           + (f'{_estimate:.0f} seconds.' if _estimate < 90
+              else f'{_estimate / 60:.1f} minutes.')
+           + ('' if NUMBA_AVAILABLE else ' Installing numba would cut this to a few seconds.'))
 
 if not bounds_valid:
     st.error('Fix the parameter bounds above before calibrating.')
