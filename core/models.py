@@ -33,7 +33,33 @@
 
 # %%
 import math
+
 import numpy as np
+
+# Optional acceleration. The GR models are sequential day loops, so they cannot
+# be vectorised, and in pure Python a single GR6J calibration runs tens of
+# millions of interpreted iterations. numba compiles the loop to machine code
+# and typically gives one to two orders of magnitude.
+#
+# It is deliberately optional and deliberately NOT in requirements.txt. numba
+# pins a supported numpy range, and forcing it into a deployment can drag numpy
+# backwards and break something else. Where numba is absent the pure Python
+# fallback runs, producing bit-identical results, only slower.
+try:
+    from numba import njit
+    NUMBA_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    NUMBA_AVAILABLE = False
+
+    def njit(*args, **kwargs):
+        """No-op stand-in so the decorators below work without numba."""
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+
+        def decorator(function):
+            return function
+
+        return decorator
 
 # %% model registry
 MODELS = ('GR4J', 'GR5J', 'GR6J')
@@ -113,83 +139,94 @@ def _ordinates(x4):
     return o1, o2
 
 
+# %% compiled kernels
+# One kernel per model, each running the whole time loop on scalars and arrays
+# so numba can compile it. The arithmetic is identical to the reference
+# implementation; only the container types changed, from Python lists to numpy
+# arrays, because numba handles arrays and does not handle lists efficiently.
+
+
+@njit(cache=True)
 def _production(s, p, e, x1):
-    """Production store update. Returns (new S, PR, actual ET)."""
+    """Production store update. Returns the new level and effective rainfall."""
     if p <= e:
         en = e - p
-        ws = min(en / x1, 13.0)
-        tws = math.tanh(ws)
+        ws = en / x1
+        if ws > 13.0:
+            ws = 13.0
+        tws = np.tanh(ws)
         sr = s / x1
         er = s * (2.0 - sr) * tws / (1.0 + (1.0 - sr) * tws)
         s = s - er
         pr = 0.0
-        ae = er + p
     else:
         pn = p - e
-        ws = min(pn / x1, 13.0)
-        tws = math.tanh(ws)
+        ws = pn / x1
+        if ws > 13.0:
+            ws = 13.0
+        tws = np.tanh(ws)
         sr = s / x1
         ps = x1 * (1.0 - sr * sr) * tws / (1.0 + sr * tws)
         s = s + ps
         pr = pn - ps
-        ae = e
 
     if s < 0.0:
         s = 0.0
 
     # percolation, with (9/4)^4 = 25.62890625
-    sr = (s / x1) ** 4
-    perc = s * (1.0 - 1.0 / (1.0 + sr / 25.62890625) ** 0.25)
+    sr4 = (s / x1) ** 4
+    perc = s * (1.0 - 1.0 / (1.0 + sr4 / 25.62890625) ** 0.25)
     s = s - perc
 
-    return s, pr + perc, ae
+    return s, pr + perc
 
 
-def _routing_outflow(r, x3):
-    """Outflow from the non-linear routing store."""
+@njit(cache=True)
+def _routing_out(r, x3):
     return r * (1.0 - 1.0 / (1.0 + (r / x3) ** 4) ** 0.25)
 
 
-def _exponential_outflow(level, x6):
-    """Outflow from the GR6J exponential store, with airGR's numerical guards."""
+@njit(cache=True)
+def _exponential_out(level, x6):
     ar = level / x6
-    ar = max(-33.0, min(33.0, ar))
+    if ar > 33.0:
+        ar = 33.0
+    elif ar < -33.0:
+        ar = -33.0
 
     if ar > 7.0:
-        return level + x6 / math.exp(ar)
+        return level + x6 / np.exp(ar)
     if ar < -7.0:
-        return x6 * math.exp(ar)
-    return x6 * math.log(math.exp(ar) + 1.0)
+        return x6 * np.exp(ar)
+    return x6 * np.log(np.exp(ar) + 1.0)
 
 
-# %% GR4J
-def simulate_gr4j(precip, pet, params):
-    x1, x2, x3, x4 = (params[k] for k in PARAM_NAMES['GR4J'])
+@njit(cache=True)
+def _gr4j_loop(precip, pet, x1, x2, x3, x4, o1, o2):
+    n = precip.shape[0]
+    n1, n2 = o1.shape[0], o2.shape[0]
 
-    o1, o2 = _ordinates(x4)
-    uh1 = [0.0] * len(o1)
-    uh2 = [0.0] * len(o2)
+    uh1 = np.zeros(n1)
+    uh2 = np.zeros(n2)
+    out = np.empty(n)
 
     s = 0.3 * x1
     r = 0.5 * x3
 
-    n = len(precip)
-    out = np.empty(n)
-
     for i in range(n):
-        s, pr, _ = _production(s, precip[i], pet[i], x1)
+        s, pr = _production(s, precip[i], pet[i], x1)
 
-        # split before convolution, 90 percent to UH1 and 10 percent to UH2
+        # split before convolution, 90 per cent to UH1 and 10 per cent to UH2
         pruh1 = pr * 0.9
         pruh2 = pr * 0.1
 
-        for j in range(len(o1) - 1):
+        for j in range(n1 - 1):
             uh1[j] = uh1[j + 1] + o1[j] * pruh1
-        uh1[-1] = o1[-1] * pruh1
+        uh1[n1 - 1] = o1[n1 - 1] * pruh1
 
-        for j in range(len(o2) - 1):
+        for j in range(n2 - 1):
             uh2[j] = uh2[j + 1] + o2[j] * pruh2
-        uh2[-1] = o2[-1] * pruh2
+        uh2[n2 - 1] = o2[n2 - 1] * pruh2
 
         exch = x2 * (r / x3) ** 3.5
 
@@ -197,38 +234,39 @@ def simulate_gr4j(precip, pet, params):
         if r < 0.0:
             r = 0.0
 
-        qr = _routing_outflow(r, x3)
+        qr = _routing_out(r, x3)
         r = r - qr
 
-        qd = max(0.0, uh2[0] + exch)
+        qd = uh2[0] + exch
+        if qd < 0.0:
+            qd = 0.0
 
-        out[i] = max(0.0, qr + qd)
+        total = qr + qd
+        out[i] = total if total > 0.0 else 0.0
 
     return out
 
 
-# %% GR5J
-def simulate_gr5j(precip, pet, params):
-    x1, x2, x3, x4, x5 = (params[k] for k in PARAM_NAMES['GR5J'])
+@njit(cache=True)
+def _gr5j_loop(precip, pet, x1, x2, x3, x4, x5, o2):
+    n = precip.shape[0]
+    n2 = o2.shape[0]
 
-    # GR5J uses UH2 only, with the whole of PR routed through it
-    _, o2 = _ordinates(x4)
-    uh2 = [0.0] * len(o2)
+    uh2 = np.zeros(n2)
+    out = np.empty(n)
 
     s = 0.3 * x1
     r = 0.5 * x3
 
-    n = len(precip)
-    out = np.empty(n)
-
     for i in range(n):
-        s, pr, _ = _production(s, precip[i], pet[i], x1)
+        s, pr = _production(s, precip[i], pet[i], x1)
 
-        for j in range(len(o2) - 1):
+        # GR5J routes the WHOLE of PR through one hydrograph of base 2*X4
+        for j in range(n2 - 1):
             uh2[j] = uh2[j + 1] + o2[j] * pr
-        uh2[-1] = o2[-1] * pr
+        uh2[n2 - 1] = o2[n2 - 1] * pr
 
-        # split after convolution
+        # and splits 90/10 AFTER convolution
         q9 = uh2[0] * 0.9
         q1 = uh2[0] * 0.1
 
@@ -238,65 +276,99 @@ def simulate_gr5j(precip, pet, params):
         if r < 0.0:
             r = 0.0
 
-        qr = _routing_outflow(r, x3)
+        qr = _routing_out(r, x3)
         r = r - qr
 
-        qd = max(0.0, q1 + exch)
+        qd = q1 + exch
+        if qd < 0.0:
+            qd = 0.0
 
-        out[i] = max(0.0, qr + qd)
+        total = qr + qd
+        out[i] = total if total > 0.0 else 0.0
 
     return out
 
 
-# %% GR6J
-def simulate_gr6j(precip, pet, params):
-    x1, x2, x3, x4, x5, x6 = (params[k] for k in PARAM_NAMES['GR6J'])
+@njit(cache=True)
+def _gr6j_loop(precip, pet, x1, x2, x3, x4, x5, x6, o1, o2):
+    n = precip.shape[0]
+    n1, n2 = o1.shape[0], o2.shape[0]
 
-    o1, o2 = _ordinates(x4)
-    uh1 = [0.0] * len(o1)
-    uh2 = [0.0] * len(o2)
+    uh1 = np.zeros(n1)
+    uh2 = np.zeros(n2)
+    out = np.empty(n)
 
     s = 0.3 * x1
     r = 0.5 * x3
     r_exp = 0.0
 
-    n = len(precip)
-    out = np.empty(n)
-
     for i in range(n):
-        s, pr, _ = _production(s, precip[i], pet[i], x1)
+        s, pr = _production(s, precip[i], pet[i], x1)
 
         pruh1 = pr * 0.9
         pruh2 = pr * 0.1
 
-        for j in range(len(o1) - 1):
+        for j in range(n1 - 1):
             uh1[j] = uh1[j + 1] + o1[j] * pruh1
-        uh1[-1] = o1[-1] * pruh1
+        uh1[n1 - 1] = o1[n1 - 1] * pruh1
 
-        for j in range(len(o2) - 1):
+        for j in range(n2 - 1):
             uh2[j] = uh2[j + 1] + o2[j] * pruh2
-        uh2[-1] = o2[-1] * pruh2
+        uh2[n2 - 1] = o2[n2 - 1] * pruh2
 
         exch = x2 * (r / x3 - x5)
 
-        # 60 percent of the UH1 output to the routing store
+        # the exchange term is applied THREE times in GR6J
         r = r + 0.6 * uh1[0] + exch
         if r < 0.0:
             r = 0.0
 
-        qr = _routing_outflow(r, x3)
+        qr = _routing_out(r, x3)
         r = r - qr
 
-        # 40 percent to the exponential store, which is NOT clipped at zero
+        # the exponential store is NOT clipped at zero
         r_exp = r_exp + 0.4 * uh1[0] + exch
-        qr_exp = _exponential_outflow(r_exp, x6)
+        qr_exp = _exponential_out(r_exp, x6)
         r_exp = r_exp - qr_exp
 
-        qd = max(0.0, uh2[0] + exch)
+        qd = uh2[0] + exch
+        if qd < 0.0:
+            qd = 0.0
 
-        out[i] = max(0.0, qr + qd + qr_exp)
+        total = qr + qd + qr_exp
+        out[i] = total if total > 0.0 else 0.0
 
     return out
+
+
+# %% model entry points
+def _forcing(precip, pet):
+    return (np.ascontiguousarray(precip, dtype=np.float64),
+            np.ascontiguousarray(pet, dtype=np.float64))
+
+
+def simulate_gr4j(precip, pet, params):
+    x1, x2, x3, x4 = (float(params[k]) for k in PARAM_NAMES['GR4J'])
+    o1, o2 = _ordinates(x4)
+    precip, pet = _forcing(precip, pet)
+    return _gr4j_loop(precip, pet, x1, x2, x3, x4,
+                      np.asarray(o1, dtype=np.float64), np.asarray(o2, dtype=np.float64))
+
+
+def simulate_gr5j(precip, pet, params):
+    x1, x2, x3, x4, x5 = (float(params[k]) for k in PARAM_NAMES['GR5J'])
+    _, o2 = _ordinates(x4)
+    precip, pet = _forcing(precip, pet)
+    return _gr5j_loop(precip, pet, x1, x2, x3, x4, x5,
+                      np.asarray(o2, dtype=np.float64))
+
+
+def simulate_gr6j(precip, pet, params):
+    x1, x2, x3, x4, x5, x6 = (float(params[k]) for k in PARAM_NAMES['GR6J'])
+    o1, o2 = _ordinates(x4)
+    precip, pet = _forcing(precip, pet)
+    return _gr6j_loop(precip, pet, x1, x2, x3, x4, x5, x6,
+                      np.asarray(o1, dtype=np.float64), np.asarray(o2, dtype=np.float64))
 
 
 # %% dispatcher
