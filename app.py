@@ -32,7 +32,9 @@ from core.signatures import (build_daily_frame, build_all_products, MONTH_NAMES,
 from core.indices import (cease_to_flow_spells, annual_cease_to_flow_spells,
                           colwell_indices, half_flow_date, seasonality, fdc_indices,
                           streamflow_elasticity, anomalous_accumulation_onset,
-                          onset_lag, whole_record_indices, trend_table)
+                          onset_lag, whole_record_indices, trend_table,
+                          annual_regime_indices, rolling_colwell)
+from core.evaluation import (efficiency_table, signature_report, worst_signatures)
 from core.rainfall import (annual_rainfall, spi, cumulative_by_water_year,
                            annual_anomaly_series)
 from core.plots import (cumulative_spaghetti, anomaly_bars, rainfall_runoff_cumulative)
@@ -43,7 +45,7 @@ plt.style.use('default')
 plt.rc('axes', linewidth=0.5)
 plt.rc('font', **{'sans-serif': 'Arial', 'family': 'sans-serif'})
 plt.rcParams.update({'font.size': 8, 'legend.labelspacing': 0.1, 'lines.linewidth': 1,
-                     'xtick.direction': 'out', 'ytick.direction': 'out'})
+                     'xtick.direction': 'inout', 'ytick.direction': 'inout'})
 
 # %% constants
 EPS = 0.01
@@ -52,6 +54,7 @@ C_PARAM = ['#FCB711', '#F37021', '#CC004C', '#6460AA', '#0DB14B', '#2BA9E0']
 MAX_EXPORT_MODELS = 30
 MAX_HISTORY = 20
 C_BASE = '#2BA9E0'
+FIGURE_DPI = 300
 CREDIT = 'Produced with the GR gap filling tool, Charles Darwin University'
 LONG_FORCING_GAP = 5
 CACHE_TTL = 3600
@@ -154,7 +157,7 @@ def show(fig, name=None):
     """
     if name is not None:
         png = BytesIO()
-        fig.savefig(png, format='png', dpi=200, bbox_inches='tight', facecolor='white')
+        fig.savefig(png, format='png', dpi=FIGURE_DPI, bbox_inches='tight', facecolor='white')
         FIGURES[name] = png.getvalue()
 
     st.pyplot(fig)
@@ -167,13 +170,23 @@ def fdc(q):
     return np.arange(1, len(q) + 1) / (len(q) + 1) * 100, q
 
 
-def plot_hydrograph(dates, q_obs, series):
+def plot_hydrograph(dates, q_obs, series, log_y=False):
     fig, ax = new_fig(17, 8, [0.10, 0.15, 0.85, 0.75])
     ax.plot(dates, q_obs, color=C_OBS, alpha=0.6, linewidth=1, label='Observed')
     for values, colour, label, lw in series:
         ax.plot(dates, values, color=colour, alpha=0.8, linewidth=lw, label=label)
+
     ax.set_xlabel('Date')
     ax.set_ylabel('Flow (mm/d)')
+
+    # span exactly the record, and anchor a linear axis at zero so the
+    # hydrograph is not floated above the baseline by a stray small value
+    ax.set_xlim(pd.Timestamp(min(dates)), pd.Timestamp(max(dates)))
+    if log_y:
+        ax.set_yscale('log')
+    else:
+        ax.set_ylim(bottom=0)
+
     ax.legend()
     return fig, ax
 
@@ -276,6 +289,16 @@ def run_gapfill(q_obs, q50, method):
 @st.cache_data(show_spinner='Separating baseflow...', max_entries=3, ttl=CACHE_TTL)
 def run_baseflow(q, alpha, passes, n_reflect):
     return lyne_hollick(q, alpha=alpha, passes=passes, n_reflect=n_reflect)
+
+
+@st.cache_data(show_spinner='Evaluating against signatures...', max_entries=3, ttl=CACHE_TTL)
+def run_signature_report(dates, q_obs, q_median, q_best, alpha, passes, n_reflect,
+                         ctf_threshold, warmup_days):
+    simulations = {'Behavioural median': q_median, 'Best model': q_best}
+    return (signature_report(dates, q_obs, simulations, alpha=alpha, passes=passes,
+                             n_reflect=n_reflect, ctf_threshold=ctf_threshold,
+                             warmup_days=warmup_days),
+            efficiency_table(q_obs, simulations, warmup_days=warmup_days))
 
 
 @st.cache_data(show_spinner=False, max_entries=3, ttl=CACHE_TTL)
@@ -1048,6 +1071,8 @@ ax.plot(cal_dates, q_gapfilled, color=C_CAL, linewidth=1, label='Gap filled')
 ax.plot(cal_dates, q_obs, color=C_OBS, linewidth=1, label='Observed')
 ax.set_xlabel('Date')
 ax.set_ylabel('Flow (mm/d)')
+ax.set_xlim(pd.Timestamp(cal_dates.min()), pd.Timestamp(cal_dates.max()))
+ax.set_ylim(bottom=0)
 ax.legend()
 show(fig_gap, 'gapfilled_hydrograph')
 
@@ -1143,6 +1168,7 @@ ax.plot(cal_dates, q_baseflow, color=C_BASE, linewidth=1.2, label='Baseflow')
 ax.fill_between(cal_dates, 0, q_baseflow, color=C_BASE, alpha=0.3)
 ax.set_xlabel('Date')
 ax.set_ylabel('Flow (mm/d)')
+ax.set_xlim(pd.Timestamp(cal_dates.min()), pd.Timestamp(cal_dates.max()))
 ax.set_yscale('log')
 ax.legend()
 show(fig_bf, 'baseflow_separation')
@@ -1216,6 +1242,54 @@ else:
 
     with st.expander('Annual Summary Table'):
         st.dataframe(annual, hide_index=True)
+
+# %% 6a. model evaluation against signatures
+section_break()
+st.subheader('Model Evaluation Against the Observed Record')
+
+st.write('A single efficiency score answers one narrow question, weighted one particular way. '
+         'It cannot say whether the model reproduces the shape of the flow duration curve, the '
+         'proportion of flow arriving as baseflow, the flashiness of the hydrograph or the '
+         'number of days the river stops flowing. Those are the properties that get used '
+         'downstream, so they are what the model should be judged on. Everything below is '
+         'computed on observed days only, so gap filled values never enter the evaluation.')
+
+sig_report, eff_table = run_signature_report(
+    cal_dates, q_obs, q50, q_cal, bf_alpha, bf_passes, bf_reflect,
+    ctf_threshold, cal['warmup_days'])
+
+if eff_table is not None and not eff_table.empty:
+    st.markdown('**Efficiency criteria under every transformation**')
+    st.dataframe(eff_table.set_index('Model').T, use_container_width=True)
+    st.caption('KGE is shown with its three components. A composite of 0.85 built from a '
+               'correlation of 0.95 and a variability ratio of 1.3 describes a very different '
+               'failure from one built from a correlation of 0.87 and a variability ratio of '
+               '1.0, and the composite alone cannot tell them apart. Alpha above 1 means the '
+               'simulation is too variable; beta above 1 means it carries a positive volume bias.')
+    products['efficiency_criteria'] = eff_table
+
+if sig_report is not None and not sig_report.empty:
+    st.markdown('**Hydrological signatures, observed against modelled**')
+    st.dataframe(sig_report, hide_index=True, use_container_width=True)
+    products['signature_evaluation'] = sig_report
+
+    poor = worst_signatures(sig_report, threshold=25.0)
+    if poor:
+        st.warning('Signatures reproduced worst, each out by more than 25 per cent in at least '
+                   'one of the two simulations: ' + '; '.join(poor[:6])
+                   + ('.' if len(poor) <= 6 else ', and others.')
+                   + ' A model can score well on an efficiency criterion and still get these '
+                     'wrong, which matters if any of them is the quantity the work depends on.')
+    else:
+        st.success('Every signature is reproduced to within 25 per cent by both the behavioural '
+                   'median and the best model.')
+
+    st.caption('The behavioural median is the day-by-day median of the retained ensemble and is '
+               'not itself a model run, so it can reproduce signatures that no single member '
+               'reproduces, and can smooth away flashiness that every member has. The best model '
+               'is one parameter set and is internally consistent. Where the two differ '
+               'markedly on a signature, prefer the best model for anything requiring physical '
+               'consistency and the median for anything requiring a central estimate.')
 
 # %% 6b. signature indices and long-term analysis
 section_break()
@@ -1389,6 +1463,50 @@ if complete_years:
                            'water years, after Sankarasubramanian et al. (2001). This is the '
                            'number to carry into a climate projection.')
 
+    # --- regime indices per water year ---
+    regime = annual_regime_indices(cal_dates, q_gapfilled, wy_labels, complete_years)
+    if not regime.empty:
+        products['annual_regime_indices'] = regime
+
+        st.markdown('**Flashiness and regime by water year**')
+        fig_regime, ax = new_fig(17, 7, [0.10, 0.16, 0.78, 0.76])
+        ax.bar(regime['WaterYear'], regime['RichardsBakerIndex'], color=C_CAL,
+               edgecolor='black', linewidth=0.4, label='Richards-Baker index')
+        ax.set_xlabel(f'Water year (starting {MONTH_NAMES[wy_start_month - 1]})')
+        ax.set_ylabel('Richards-Baker index (-)')
+        ax_cv = ax.twinx()
+        ax_cv.plot(regime['WaterYear'], regime['CoefficientOfVariation'], color='black',
+                   marker='o', markersize=3, linewidth=1, label='Coefficient of variation')
+        ax_cv.set_ylabel('Coefficient of variation (-)')
+        ax.legend(loc='upper left', fontsize=7)
+        ax_cv.legend(loc='upper right', fontsize=7)
+        show(fig_regime, 'annual_flashiness')
+        st.caption('Flashiness is the path length of the hydrograph divided by total flow, so a '
+                   'smoothly interpolated gap lowers it. Read this against the percentage filled '
+                   'column in the annual table before interpreting any trend.')
+
+    rolling = rolling_colwell(cal_dates, q_gapfilled, wy_labels, complete_years, window=15)
+    if not rolling.empty:
+        products['rolling_colwell'] = rolling
+
+        st.markdown('**Regime predictability through time**')
+        fig_col, ax = new_fig(17, 7, [0.10, 0.16, 0.86, 0.76])
+        ax.plot(rolling['CentreWaterYear'], rolling['Predictability'], color='black',
+                linewidth=1.8, label='Predictability (P)')
+        ax.plot(rolling['CentreWaterYear'], rolling['Constancy'], color=C_BASE,
+                linewidth=1.4, label='Constancy (C)')
+        ax.plot(rolling['CentreWaterYear'], rolling['Contingency'], color='#F37021',
+                linewidth=1.4, label='Contingency (M)')
+        ax.set_xlabel('Centre of 15 year window (water year)')
+        ax.set_ylabel('Colwell index (-)')
+        ax.set_ylim(0, 1)
+        ax.legend(fontsize=7)
+        show(fig_col, 'rolling_colwell')
+        st.caption('Predictability is the sum of constancy and contingency. A river losing '
+                   'contingency is losing its seasonal signal, which is a different problem from '
+                   'one losing constancy, and a single whole-record value cannot distinguish '
+                   'either from no change at all.')
+
     # --- trends ---
     trend_inputs = annual.merge(rain_annual[['WaterYear', 'Rainfall_mm']],
                                 on='WaterYear', how='left') if not rain_annual.empty else annual
@@ -1400,8 +1518,14 @@ if complete_years:
         trend_inputs = trend_inputs.merge(timing[['WaterYear', 'DayOfWaterYear']],
                                           on='WaterYear', how='left')
 
+    if not regime.empty:
+        trend_inputs = trend_inputs.merge(
+            regime[['WaterYear', 'RichardsBakerIndex', 'CoefficientOfVariation']],
+            on='WaterYear', how='left')
+
     trends = trend_table(trend_inputs, 'WaterYear',
-                         ['Flow_GL', 'Rainfall_mm', 'Baseflow_GL', 'BFI', 'DayOfWaterYear'])
+                         ['Flow_GL', 'Rainfall_mm', 'Baseflow_GL', 'BFI', 'DayOfWaterYear',
+                          'RichardsBakerIndex', 'CoefficientOfVariation'])
     if not trends.empty:
         products['trends'] = trends
         st.markdown('**Trends (Mann-Kendall with Sen slope)**')
