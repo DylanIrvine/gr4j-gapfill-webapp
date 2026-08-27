@@ -512,6 +512,38 @@ st.write(
     'downward structural sensitivity analysis of hydrological models to improve low-flow '
     'simulation. Journal of Hydrology 411(1-2), 66-76.'
 )
+with st.expander('Model structures and what each parameter does'):
+    st.image('docs/gr_structures.png',
+             caption='Production module shared by all three models, and the routing '
+                     'differences between GR4J, GR5J and GR6J.',
+             use_container_width=True)
+
+    st.markdown("""
+**Three differences that are easy to misread.**
+
+- **Routing split.** GR4J and GR6J split effective rainfall 90/10 *before*
+  convolution and use two unit hydrographs, of base X4 and 2·X4. GR5J routes all
+  of Pr through a single hydrograph of base 2·X4 and splits *after*. GR5J is not
+  GR4J with a modified exchange term.
+- **Exchange applications.** F is applied twice in GR4J and GR5J, three times in
+  GR6J. The same X2 moves substantially more water in GR6J.
+- **Exponential store.** R2 is not bounded below at zero. That is what sustains a
+  slow recession indefinitely, and it is why GR6J cannot produce exactly zero flow.
+""")
+
+    st.dataframe(
+        pd.DataFrame([
+            {'Parameter': name,
+             'Meaning': PARAM_LABELS[name],
+             'Units': {'X1': 'mm', 'X2': 'mm/d', 'X3': 'mm', 'X4': 'd',
+                       'X5': '-', 'X6': 'mm'}[name],
+             'Range': f'{PARAM_BOUNDS[name][0]:g} to {PARAM_BOUNDS[name][1]:g}',
+             'Typical': {'X1': '100 to 800', 'X2': '-5 to 3', 'X3': '20 to 500',
+                         'X4': '1 to 10', 'X5': '-1 to 1',
+                         'X6': '1 to 60'}[name]}
+            for name in PARAM_NAMES[model]
+        ]),
+        hide_index=True, use_container_width=True)
 
 # %% 1. upload
 st.subheader('1. Upload Data')
