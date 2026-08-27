@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from core.models import (simulate, MODELS, PARAM_NAMES, PARAM_BOUNDS,
                          PARAM_LABELS, PARAM_ROUNDING, MODEL_NOTES, NUMBA_AVAILABLE)
 from core.metrics import (kge, nse, score, criterion_label, composite_label,
+                          resolve_kge_bias, kge_bias_is_unstable,
                           METRICS, TRANSFORMS, TRANSFORM_LABELS, COMPOSITE_TRANSFORMS)
 from core.units import cumecs_to_mmd, mmd_to_cumecs, mld_to_mmd, mmd_to_mld
 from core.calibration import calibrate_gr
@@ -40,10 +41,45 @@ from core.rainfall import (annual_rainfall, spi, cumulative_by_water_year,
 from core.plots import (cumulative_spaghetti, anomaly_bars, rainfall_runoff_cumulative)
 from core.baseflow import recession_analysis
 
+# %% interface styling
+# Streamlit's primary button is red in the default theme, and the workflow is a
+# long single column in which every step looks alike. Making the one action that
+# starts a multi-minute computation visually distinct is worth the two lines.
+st.markdown("""
+<style>
+div.stButton > button[kind="primary"] {
+    background-color: #C0392B;
+    border-color: #C0392B;
+    color: white;
+    font-weight: 600;
+}
+div.stButton > button[kind="primary"]:hover {
+    background-color: #A93226;
+    border-color: #A93226;
+    color: white;
+}
+div.stButton > button[kind="primary"]:disabled {
+    background-color: #E6B0AA;
+    border-color: #E6B0AA;
+    color: #FFFFFF;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
 # %% plot settings
 plt.style.use('default')
 plt.rc('axes', linewidth=0.5)
-plt.rc('font', **{'sans-serif': 'Arial', 'family': 'sans-serif'})
+# Arial first, with fallbacks so a machine without it degrades to the nearest
+# metric-compatible face rather than to the matplotlib default. legend.frameon
+# off applies to every legend, so individual calls need not repeat it.
+plt.rc('font', **{'family': 'sans-serif',
+                  'sans-serif': ['Arial', 'Helvetica', 'Liberation Sans',
+                                 'Nimbus Sans', 'DejaVu Sans']})
+plt.rcParams.update({'legend.frameon': False,
+                     'legend.framealpha': 0.0,
+                     'legend.borderpad': 0.3,
+                     'axes.unicode_minus': False})
 plt.rcParams.update({'font.size': 8, 'legend.labelspacing': 0.1, 'lines.linewidth': 1,
                      'xtick.direction': 'inout', 'ytick.direction': 'inout'})
 
@@ -85,7 +121,7 @@ GAP_METHODS = ['Behavioural Median', 'Endpoint Snapped Residuals',
 REQUIRED_ARGUMENTS = {
     'core/calibration.py': (calibrate_gr, ['model', 'transform_kind', 'composite_weight',
                                           'bounds', 'seed', 'refine_sample',
-                                          'progress_callback']),
+                                          'kge_bias', 'progress_callback']),
     'core/models.py': (simulate, ['model']),
     'core/metrics.py': (score, ['metric', 'transform_kind']),
 }
@@ -707,6 +743,15 @@ if criterion_type == 'Single transformation':
     st.caption(f'Calibration will maximise {criterion}. Values are not comparable across '
                'transformations, so do not read a higher number under one transform as a better '
                'model than a lower number under another.')
+
+    if metric == 'KGE' and transform_kind == 'log':
+        st.info('KGE on log-transformed flow uses a standardised bias component here, '
+                'and is written KGE* to mark it. The usual bias term is a ratio of means, '
+                'which is well defined for discharge but not for ln(Q + eps), a quantity '
+                'that passes through zero. With the standard formula an identical five per '
+                'cent overestimate can score anywhere from 0.37 to 0.99 depending only on '
+                'the units the flow is expressed in. Values marked KGE* are therefore not '
+                'directly comparable with a KGE(log Q) computed elsewhere.')
 else:
     transform_kind = 'none'
     composite_weight = st.slider(
@@ -846,7 +891,8 @@ st.caption(f'About {_evals:,} model evaluations, roughly '
 if not bounds_valid:
     st.error('Fix the parameter bounds above before calibrating.')
 
-if st.button('Calibrate', disabled=not bounds_valid):
+if st.button('Calibrate', type='primary', disabled=not bounds_valid,
+             use_container_width=True):
 
     cal_bar = st.progress(0.0, text=f'Calibrating {model}...')
     generation = {'n': 0}
@@ -1007,6 +1053,53 @@ st.dataframe(behavioural_df[list(cal_params) + ['Score']].describe())
 st.subheader('Calibration Results')
 st.json(best_params)
 
+# %% convergence diagnostics
+# Ported from the package, where a sweep produces more calibrations than can be
+# inspected. The same checks are useful here for the opposite reason: a single
+# calibration is easy to over-read, and these name the specific ways in which a
+# good-looking score can rest on a search that did not converge.
+
+DEGENERATE_FRACTION = 1e-4      # spread below this fraction of the range
+SCORE_CORRELATION_LIMIT = 0.4   # score still varying with a parameter
+
+diagnostic_messages = []
+
+for name in cal_params:
+    low, high = cal_bounds[name]
+    span = high - low
+    values = behavioural_df[name].to_numpy(dtype=float)
+
+    if len(values) > 2 and np.std(values) < DEGENERATE_FRACTION * span:
+        diagnostic_messages.append(
+            f'{name} shows no spread across the retained set, so the set records a '
+            'collapse of the search rather than a region of parameter space.')
+
+if len(behavioural_df) > 2 and 'Score' in behavioural_df:
+    scores = behavioural_df['Score'].to_numpy(dtype=float)
+    correlations = {}
+    if np.std(scores) > 0:
+        for name in cal_params:
+            values = behavioural_df[name].to_numpy(dtype=float)
+            if np.std(values) > 0:
+                correlations[name] = float(np.corrcoef(values, scores)[0, 1])
+
+    if correlations:
+        worst = max(correlations, key=lambda k: abs(correlations[k]))
+        if abs(correlations[worst]) > SCORE_CORRELATION_LIMIT:
+            diagnostic_messages.append(
+                f'The score still varies systematically with {worst} across the retained '
+                f'set (r = {correlations[worst]:+.2f}). In a converged set the score is '
+                'near flat with respect to every parameter, so this usually means the '
+                'search was still descending a ridge when it stopped. Raise the maximum '
+                'iterations and re-run.')
+
+if diagnostic_messages:
+    for message in diagnostic_messages:
+        st.warning(message)
+else:
+    st.success('Convergence diagnostics passed: no parameter is degenerate and the score '
+               'is flat with respect to the retained parameter sets.')
+
 for name in cal_params:
     lo, hi = cal_bounds[name]
     tol = 0.001 * (hi - lo)
@@ -1074,7 +1167,7 @@ for i, name in enumerate(cal_params):
     ax.set_title(name)
     ax.set_xlabel(PARAM_LABELS[name])
     ax.set_ylabel('Count')
-    ax.legend(fontsize=7, frameon=False)
+    ax.legend(fontsize=7)
 
 fig_hist.subplots_adjust(hspace=0.55, wspace=0.20)
 show(fig_hist, 'parameter_distributions')

@@ -164,20 +164,20 @@ def recession_alpha(q, min_length=RECESSION_MIN_LENGTH, skip_days=RECESSION_SKIP
     Alpha is then the chosen quantile of the daily ratio Q(t)/Q(t-1) across all
     retained recession days.
 
-    Days declining by less than max_ratio are excluded. Without that guard a
+    Days declining by less than max_ratio are excluded. Without that guard, a
     recession that has flattened onto a baseflow floor contributes a long tail
-    of ratios arbitrarily close to 1, which drags the estimate upward: on a
-    synthetic hydrograph with a true decay constant of 0.85 the unguarded
-    estimator returned 0.97.
+    of ratios arbitrarily close to 1, biasing the estimate upward. On a
+    single-component synthetic recession with a decay constant of 0.85, omitting
+    the guard raises the estimate to approximately 0.97.
 
     Interpretation caveat
     ---------------------
-    A real hydrograph mixes a fast quickflow recession with a slow baseflow
-    recession, so the ratios are drawn from a mixture and the answer depends on
-    which part of the mixture you sample. The quartiles are returned alongside
-    alpha for exactly this reason: a wide interquartile range means the estimate
-    is not well defined for that catchment and the choice of quantile is doing
-    real work. Report the quartiles, not just the point value.
+    A hydrograph mixes a fast quickflow recession with a slow baseflow
+    recession, so the ratios are drawn from a mixture and the estimate depends
+    on which part of that mixture is sampled. The quartiles are returned
+    alongside alpha for this reason: a wide interquartile range indicates the
+    estimate is not well defined for the catchment and that the choice of
+    quantile materially affects the result. Both should be reported.
 
     Returns
     -------
@@ -259,13 +259,13 @@ def recession_analysis(q, min_length=RECESSION_MIN_LENGTH, skip_days=RECESSION_S
     with no residual quickflow and no evapotranspiration, so its slope and
     intercept are an aquifer drainage signature rather than an event property.
 
-    The exponent b is the diagnostic. b close to 1 is a linear reservoir, which
-    is the assumption behind an exponential recession and behind the constant
-    filter coefficient used in Lyne and Hollick. b near 1.5 is the Boussinesq
-    late-time solution for a horizontal unconfined aquifer. b near 3 is the
-    early-time solution. A catchment whose b differs markedly from 1 is telling
-    you that a single recession constant is a poor description of it, which is
-    directly relevant to whether the derived alpha means anything.
+    The exponent b is diagnostic. b close to 1 corresponds to a linear
+    reservoir, the assumption underlying an exponential recession and the
+    constant filter coefficient of Lyne and Hollick. b near 1.5 corresponds to
+    the Boussinesq late-time solution for a horizontal unconfined aquifer, and b
+    near 3 to the early-time solution. Where b departs markedly from 1, a single
+    recession constant is a poor description of the catchment, which bears
+    directly on the interpretation of a derived filter coefficient.
 
     When b is close to 1, the equivalent daily recession ratio is exp(-a), which
     is directly comparable with the filter coefficient.

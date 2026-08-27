@@ -1,10 +1,10 @@
 # core/indices.py
 # Hydrological signature indices computed from a daily flow record.
 #
-# These are the metrics chosen because they are useful in their own right AND
-# because they are likely to be sensitive to how the record was gap filled and
-# to which model produced the filled values. That sensitivity is the point: a
-# metric you cannot put an uncertainty on is a metric you should not publish.
+# The metrics implemented here are selected both for their descriptive value
+# and because they are sensitive to how a record was gap filled and to which
+# model produced the filled values. That sensitivity is itself informative and
+# should be reported alongside the metric.
 #
 # References
 #   Colwell, R.K. (1974). Predictability, constancy and contingency of periodic
@@ -112,15 +112,15 @@ def annual_cease_to_flow_spells(spells, water_year_of, complete_years):
 def colwell_indices(dates, q, n_classes=11, period='month'):
     """Colwell's predictability, split into constancy and contingency.
 
-    Predictability P is how well you can say what the flow will be if you know
-    the date. It decomposes into constancy C, meaning the flow is always much
-    the same, and contingency M, meaning the flow is reliably different at
-    different times of year, with P = C + M.
+    Predictability P measures how well flow can be anticipated from the date
+    alone. It decomposes into constancy C, the tendency for flow to remain in
+    the same state, and contingency M, the tendency for flow to differ
+    reliably between times of year, with P = C + M.
 
-    Northern Australian rivers are the global archetype of low constancy and
-    high contingency: wildly variable, but variable on a schedule. A single
-    number that separates those two is more informative about regime character
-    than any measure of variability alone.
+    Monsoonal regimes typically combine low constancy with high contingency:
+    highly variable, but variable on a seasonal schedule. Separating the two
+    components is more informative about regime character than a measure of
+    variability alone.
 
     Flow classes are logarithmic, with zero and near-zero flows given their own
     class so that an intermittent river is not forced into a log bin.
@@ -448,9 +448,7 @@ def onset_lag(rain_onset, flow_onset):
 
     This lag is a catchment storage signature. A karst or deeply weathered
     catchment absorbs the first rains and responds late; a shallow, sealed or
-    already-wet catchment responds almost immediately. As far as I can tell it
-    is not published as a routine metric for northern Australia, which makes it
-    the most novel item in this set.
+    already-wet catchment responds almost immediately.
     """
     if rain_onset.empty or flow_onset.empty:
         return pd.DataFrame()

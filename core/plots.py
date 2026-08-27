@@ -19,6 +19,14 @@ import calendar
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
+
+# Figures are built with Figure() rather than plt.figure(). plt.figure
+# registers each figure with pyplot's global manager, which holds a reference
+# until the figure is explicitly closed. Streamlit redraws on every widget
+# interaction, so a long session would accumulate them.
 
 # %% colours
 C_OTHER = '#C8C8C8'
@@ -55,7 +63,7 @@ def _month_ticks(start_month, n_days=366):
 
 
 def _figure(width_cm, height_cm, rect):
-    fig = plt.figure(figsize=(width_cm * CM, height_cm * CM))
+    fig = Figure(figsize=(width_cm * CM, height_cm * CM))
     ax = fig.add_axes(rect)
     # ticks pointing both ways, and no top or right spine, so annotations
     # placed outside the axes are not crossed by a frame line
@@ -116,10 +124,10 @@ def cumulative_spaghetti(wide, start_month=1, ylabel='Cumulative rainfall (mm)',
     ax.set_xlabel('Month')
     ax.set_ylabel(ylabel)
 
-    grey_handle = plt.Line2D([], [], color=C_OTHER, linewidth=0.7, label='Other years')
+    grey_handle = Line2D([], [], color=C_OTHER, linewidth=0.7, label='Other years')
     handles, _ = ax.get_legend_handles_labels()
-    ax.legend(handles=[grey_handle] + handles, loc='lower right', frameon=True,
-              framealpha=0.9, fontsize=8)
+    ax.legend(handles=[grey_handle] + handles, loc='upper left', frameon=False,
+              fontsize=8)
 
     if title:
         ax.set_title(title, loc='left', fontsize=12, pad=14 if subtitle else 6)
@@ -172,7 +180,7 @@ def anomaly_bars(anomaly, year_column, anomaly_column,
     ax.set_ylabel(ylabel)
 
     handles, labels = ax.get_legend_handles_labels()
-    recent_handle = plt.Rectangle((0, 0), 1, 1, facecolor=C_RECENT, edgecolor='black',
+    recent_handle = Rectangle((0, 0), 1, 1, facecolor=C_RECENT, edgecolor='black',
                                   linewidth=0.4,
                                   label=f'{recent}-{str(recent + 1)[-2:]}')
     ax.legend(handles=handles + [recent_handle], loc='upper left', frameon=False,

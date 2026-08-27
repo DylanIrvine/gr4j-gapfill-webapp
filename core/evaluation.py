@@ -3,18 +3,16 @@
 #
 # Why this exists
 # ---------------
-# A single efficiency score answers one narrow question: how close is the
-# simulation to the observations, weighted in one particular way. It cannot tell
-# you whether the model reproduces the shape of the flow duration curve, the
-# proportion of flow arriving as baseflow, the flashiness of the hydrograph, the
-# seasonality of the regime, or the number of days the river stops flowing.
+# A single efficiency score measures the distance between simulation and
+# observation under one weighting. It does not indicate whether the model
+# reproduces the shape of the flow duration curve, the proportion of flow
+# arriving as baseflow, the flashiness of the hydrograph, the seasonality of the
+# regime, or the number of days on which flow ceases.
 #
-# Those are the properties that get used downstream. A model can score 0.9 on
-# KGE and still get the baseflow index wrong by a third, and if the baseflow
-# index is what feeds into a water plan then the KGE was answering the wrong
-# question. Evaluating against a set of signatures rather than a single score is
-# the diagnostic approach argued for by Gupta and colleagues and formalised in
-# the FARE framework of Euser et al. (2013).
+# Those properties are what downstream analyses rely on. A model may score 0.9
+# on KGE while misestimating the baseflow index by a third. Evaluating against a
+# set of signatures rather than a single score follows the diagnostic approach
+# of Gupta et al. (2008) and the FARE framework of Euser et al. (2013).
 #
 # Everything here is computed on the days where an observation exists, so the
 # comparison is like for like and gap filled values never enter the evaluation.
@@ -31,7 +29,8 @@
 import numpy as np
 import pandas as pd
 
-from core.metrics import kge, nse, score, transform, epsilon_from_obs
+from core.metrics import (kge, nse, score, transform, epsilon_from_obs,
+                      resolve_kge_bias, criterion_label)
 from core.baseflow import lyne_hollick
 from core.indices import (colwell_indices, seasonality, fdc_indices,
                           richards_baker_index, coefficient_of_variation)
@@ -102,7 +101,7 @@ def _signatures(dates, q, alpha, passes, n_reflect, ctf_threshold):
 
 
 # %%
-def efficiency_table(q_obs, simulations, warmup_days=0):
+def efficiency_table(q_obs, simulations, warmup_days=0, kge_bias='auto'):
     """Efficiency criteria under every transformation, for each simulation.
 
     KGE is reported with its three components, because a composite of 0.85 built
@@ -126,10 +125,12 @@ def efficiency_table(q_obs, simulations, warmup_days=0):
 
         entry = {'Model': label, 'N days': int(pair.sum())}
 
-        for kind, name in [('none', 'Q'), ('sqrt', 'sqrt(Q)'),
-                           ('log', 'log(Q)'), ('inverse', '1/Q')]:
-            entry[f'NSE({name})'] = score(obs, sim, 'NSE', kind, epsilon)
-            entry[f'KGE({name})'] = score(obs, sim, 'KGE', kind, epsilon)
+        for kind in ('none', 'sqrt', 'log', 'inverse'):
+            entry[criterion_label('NSE', kind)] = score(obs, sim, 'NSE', kind, epsilon)
+            entry[criterion_label('KGE', kind, kge_bias)] = score(
+                obs, sim, 'KGE', kind, epsilon, kge_bias=kge_bias)
+
+        entry['KGE bias form'] = resolve_kge_bias('log', kge_bias)
 
         # KGE components on untransformed flow
         if obs.size > 2 and np.std(obs) > 0 and np.std(sim) > 0:

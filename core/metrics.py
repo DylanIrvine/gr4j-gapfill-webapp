@@ -98,8 +98,97 @@ def nse(obs, sim):
     return 1.0 - np.sum((obs - sim) ** 2) / denominator
 
 
+# %% the bias term
+# KGE's bias component is beta = mean_sim / mean_obs, a ratio of means. That is
+# well defined for discharge, which is strictly positive, and it is NOT well
+# defined for a signed variable. Log-transformed flow is signed: ln(Q + eps)
+# passes through zero when Q + eps passes through 1, so mean_obs can be
+# arbitrarily close to zero and beta explodes.
+#
+# The effect is large. A uniform five per cent overestimate yields KGE(log Q)
+# between approximately 0.37 and 0.99 depending only on the units in which flow
+# is expressed, because a change of units moves the mean of the log series
+# through zero. NSE on the same series is unaffected, having no ratio-of-means
+# term.
+#
+# Two bias formulations are therefore offered:
+#
+#   'ratio'         beta = mu_sim / mu_obs
+#                   the standard KGE of Gupta et al. (2009). Use it on
+#                   untransformed, square root or inverse flow, all of which are
+#                   strictly positive. Comparable with the published literature.
+#
+#   'standardised'  beta = 1 + (mu_sim - mu_obs) / sd_obs
+#                   the bias expressed in standard deviations rather than as a
+#                   ratio. Well defined for any variable, reduces to the same
+#                   behaviour when the mean is comfortably away from zero, and
+#                   is the sensible choice for a signed transform.
+#
+# The default is 'ratio' so results stay comparable with everything published,
+# and kge_bias_is_unstable() flags when that choice cannot be trusted.
+
+BIAS_FORMS = ('auto', 'ratio', 'standardised')
+
+# Transformations that can produce a negative value, for which a ratio of means
+# is not a meaningful bias measure.
+SIGNED_TRANSFORMS = ('log',)
+
+# below this ratio of |mean| to standard deviation, the ratio form is unreliable
+BIAS_STABILITY_LIMIT = 0.5
+
+
+def resolve_kge_bias(transform_kind, kge_bias='auto'):
+    """Which bias form to use for a given transformation.
+
+    'auto' selects 'standardised' for transformations that produce a signed
+    variable and 'ratio' otherwise. This is the default because the alternative
+    is an option that appears to work and does not: KGE on log-transformed flow
+    with a ratio bias returns a score determined partly by the units the flow is
+    expressed in.
+
+    The consequence is that a KGE(log Q) value from this package is not directly
+    comparable with one computed elsewhere using the standard formula. The bias
+    form is recorded alongside every reported value so the difference is visible
+    rather than implicit. Pass kge_bias='ratio' to reproduce the standard
+    formula, accepting its instability.
+    """
+    if kge_bias not in BIAS_FORMS:
+        raise ValueError(f'Unknown bias form {kge_bias!r}. Choose from {BIAS_FORMS}.')
+
+    if kge_bias != 'auto':
+        return kge_bias
+
+    return 'standardised' if transform_kind in SIGNED_TRANSFORMS else 'ratio'
+
+
+def kge_bias_is_unstable(values, limit=BIAS_STABILITY_LIMIT):
+    """True when the mean of a series is too close to zero for a ratio bias.
+
+    Pass the TRANSFORMED observations. Returns True when |mean| is small
+    relative to the standard deviation, which is when beta = mu_sim / mu_obs
+    stops being meaningful.
+    """
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+
+    if values.size < 2:
+        return False
+
+    sd = float(np.std(values))
+    if sd <= 0:
+        return False
+
+    return abs(float(np.mean(values))) / sd < limit
+
+
 # %%
-def kge(obs, sim):
+def kge(obs, sim, bias='ratio'):
+    """Kling-Gupta efficiency.
+
+    bias selects the formulation of the bias component; see BIAS_FORMS above.
+    Use 'standardised' for any transformed variable that can take a negative
+    value, which among the transforms here means the logarithm.
+    """
     obs, sim = _finite_pair(obs, sim)
 
     if len(obs) < 2:
@@ -108,21 +197,30 @@ def kge(obs, sim):
     sd_obs, sd_sim = np.std(obs), np.std(sim)
     mean_obs, mean_sim = np.mean(obs), np.mean(sim)
 
-    if sd_obs <= 0 or mean_obs == 0 or sd_sim <= 0:
+    if sd_obs <= 0 or sd_sim <= 0:
         return np.nan
 
     r = np.corrcoef(obs, sim)[0, 1]
-    alpha = sd_sim / sd_obs
-    beta = mean_sim / mean_obs
-
     if not np.isfinite(r):
         return np.nan
+
+    alpha = sd_sim / sd_obs
+
+    if bias == 'standardised':
+        beta = 1.0 + (mean_sim - mean_obs) / sd_obs
+    elif bias == 'ratio':
+        if mean_obs == 0:
+            return np.nan
+        beta = mean_sim / mean_obs
+    else:
+        raise ValueError(f'Unknown bias form {bias!r}. Choose from {BIAS_FORMS}.')
 
     return 1.0 - np.sqrt((r - 1.0) ** 2 + (alpha - 1.0) ** 2 + (beta - 1.0) ** 2)
 
 
 # %%
-def score(obs, sim, metric='KGE', transform_kind='none', epsilon=None):
+def score(obs, sim, metric='KGE', transform_kind='none', epsilon=None,
+          kge_bias='auto'):
     """Efficiency criterion computed on optionally transformed flows.
 
     The transformation is applied to both series with the same offset before the
@@ -138,16 +236,26 @@ def score(obs, sim, metric='KGE', transform_kind='none', epsilon=None):
     if metric == 'NSE':
         return nse(obs_t, sim_t)
     if metric == 'KGE':
-        return kge(obs_t, sim_t)
+        return kge(obs_t, sim_t, bias=resolve_kge_bias(transform_kind, kge_bias))
 
     raise ValueError(f'Unknown metric {metric!r}. Choose from {METRICS}.')
 
 
 # %%
-def criterion_label(metric, transform_kind):
-    """Short name for reporting, e.g. KGE(1/Q)."""
+def criterion_label(metric, transform_kind, kge_bias='auto'):
+    """Short name for reporting, e.g. KGE(1/Q).
+
+    A KGE computed with the standardised bias is marked with an asterisk, so a
+    value that is not directly comparable with the standard formula is never
+    reported as though it were.
+    """
     suffix = {'none': 'Q', 'sqrt': 'sqrt(Q)', 'log': 'log(Q)', 'inverse': '1/Q'}
-    return f'{metric}({suffix[transform_kind]})'
+    name = f'{metric}({suffix[transform_kind]})'
+
+    if metric == 'KGE' and resolve_kge_bias(transform_kind, kge_bias) == 'standardised':
+        name = f'{metric}*({suffix[transform_kind]})'
+
+    return name
 
 
 # %% composite criterion
@@ -168,7 +276,8 @@ COMPOSITE_TRANSFORMS = ('none', 'log')
 
 
 def composite_score(obs, sim, metric='KGE', weight=0.5,
-                    transforms=COMPOSITE_TRANSFORMS, epsilon=None):
+                    transforms=COMPOSITE_TRANSFORMS, epsilon=None,
+                    kge_bias='auto'):
     """Weighted mean of one criterion evaluated under two transformations.
 
     weight applies to the first transformation, 1 - weight to the second, so
@@ -179,8 +288,10 @@ def composite_score(obs, sim, metric='KGE', weight=0.5,
     if epsilon is None:
         epsilon = epsilon_from_obs(obs)
 
-    first = score(obs, sim, metric=metric, transform_kind=transforms[0], epsilon=epsilon)
-    second = score(obs, sim, metric=metric, transform_kind=transforms[1], epsilon=epsilon)
+    first = score(obs, sim, metric=metric, transform_kind=transforms[0], epsilon=epsilon,
+                  kge_bias=kge_bias)
+    second = score(obs, sim, metric=metric, transform_kind=transforms[1], epsilon=epsilon,
+                   kge_bias=kge_bias)
 
     if not (np.isfinite(first) and np.isfinite(second)):
         return np.nan
@@ -189,8 +300,8 @@ def composite_score(obs, sim, metric='KGE', weight=0.5,
     return w * first + (1.0 - w) * second
 
 
-def composite_label(metric, weight, transforms=COMPOSITE_TRANSFORMS):
-    """Short name for reporting, e.g. 0.50*KGE(Q) + 0.50*KGE(log(Q))."""
+def composite_label(metric, weight, transforms=COMPOSITE_TRANSFORMS, kge_bias='auto'):
+    """Short name for reporting, e.g. 0.50*KGE(Q) + 0.50*KGE*(log(Q))."""
     w = float(np.clip(weight, 0.0, 1.0))
-    return (f'{w:.2f}*{criterion_label(metric, transforms[0])} + '
-            f'{1.0 - w:.2f}*{criterion_label(metric, transforms[1])}')
+    return (f'{w:.2f}*{criterion_label(metric, transforms[0], kge_bias)} + '
+            f'{1.0 - w:.2f}*{criterion_label(metric, transforms[1], kge_bias)}')

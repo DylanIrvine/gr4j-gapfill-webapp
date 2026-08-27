@@ -2,10 +2,10 @@
 # Rainfall metrics computed on the same water year basis as the flow products,
 # so that rainfall and flow can be placed side by side on the same axis.
 #
-# The pairing is the point. A cumulative rainfall curve and a cumulative flow
-# curve for the same water year, drawn together, is the catchment's storage
-# behaviour as a picture: the vertical gap between them is water that fell and
-# has not yet left. No existing product does this.
+# Pairing the two is deliberate. A cumulative rainfall curve and a cumulative
+# flow curve for the same water year, plotted together, depict the catchment's
+# storage behaviour directly: the vertical separation between them is water that
+# has fallen and not yet left the catchment.
 #
 # Reference for SPI
 #   McKee, T.B., Doesken, N.J., Kleist, J. (1993). The relationship of drought

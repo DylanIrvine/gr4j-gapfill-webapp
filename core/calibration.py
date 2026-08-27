@@ -13,7 +13,7 @@ from scipy.optimize import differential_evolution
 from scipy.stats import qmc
 
 from core.models import simulate, PARAM_NAMES, PARAM_BOUNDS, PARAM_ROUNDING
-from core.metrics import score, composite_score, epsilon_from_obs
+from core.metrics import score, composite_score, epsilon_from_obs, resolve_kge_bias
 
 # %% configuration
 MAX_BEHAVIOURAL_MODELS = 200
@@ -29,7 +29,7 @@ PENALTY = 1e9
 # %%
 def _objective_function(params, precip, pet, q_obs, warmup_days, metric,
                         transform_kind, composite_weight, epsilon, model, names,
-                        archive):
+                        archive, kge_bias='auto'):
     """Negative criterion, with every valid evaluation appended to archive."""
     param_dict = dict(zip(names, [float(p) for p in params]))
 
@@ -44,10 +44,12 @@ def _objective_function(params, precip, pet, q_obs, warmup_days, metric,
 
     if composite_weight is None:
         value = score(q_obs[mask], q_sim[mask], metric=metric,
-                      transform_kind=transform_kind, epsilon=epsilon)
+                      transform_kind=transform_kind, epsilon=epsilon,
+                      kge_bias=kge_bias)
     else:
         value = composite_score(q_obs[mask], q_sim[mask], metric=metric,
-                                weight=composite_weight, epsilon=epsilon)
+                                weight=composite_weight, epsilon=epsilon,
+                                kge_bias=kge_bias)
 
     if not np.isfinite(value):
         return PENALTY
@@ -73,7 +75,7 @@ def _behavioural_frame(rows, best_score, delta, names):
 def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE',
                  transform_kind='none', composite_weight=None, maxiter=25, popsize=12,
                  behavioural_delta=0.05, seed=1, bounds=None, refine_sample=0,
-                 refine_scale=0.15, progress_callback=None):
+                 refine_scale=0.15, kge_bias='auto', progress_callback=None):
     """Calibrate a GR model and return the best parameter set plus an archive.
 
     Parameters
@@ -91,7 +93,7 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
         asks the optimiser to perform at both ends of the hydrograph rather than
         trading one for the other. It is a pragmatic calibration target and not
         a likelihood, so report it as such.
-    maxiter, popsize : differential evolution settings. Note that scipy sizes the
+    maxiter, popsize : differential evolution settings. scipy sizes the
         population as popsize times the number of parameters, so GR6J costs half
         again as much per generation as GR4J.
     behavioural_delta : models scoring within this distance of the best are retained
@@ -113,6 +115,10 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
     refine_scale : float. Margin added to each side of the box, as a fraction of
         the spread the search found for that parameter. The box itself comes from
         the search, not from the bounds.
+    kge_bias : 'auto', 'ratio' or 'standardised'. Which bias component KGE uses.
+        'auto' selects the standardised form for the logarithmic transform, where
+        a ratio of means is not well defined, and the standard ratio form
+        otherwise. See metrics.resolve_kge_bias.
     progress_callback : optional callable, called once per generation as
         callback(params_dict, convergence)
 
@@ -177,7 +183,7 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
         _objective_function,
         bounds=bounds_list,
         args=(precip, pet, q_obs, warmup_days, metric, transform_kind,
-              composite_weight, epsilon, model, names, archive),
+              composite_weight, epsilon, model, names, archive, kge_bias),
         maxiter=maxiter,
         popsize=popsize,
         seed=seed,
@@ -220,7 +226,7 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
             # single bar. The sample would then be faithfully reporting the
             # search's collapse rather than testing it. A minimum width forces
             # the sample to explore the parameter regardless of what the search
-            # did, which is the whole reason for sampling in the first place.
+            # did, defeating the purpose of drawing a sample.
             minimum_span = MIN_REFINE_SPAN * (bounds[name][1] - bounds[name][0])
             span = max(span, minimum_span)
 
@@ -250,7 +256,7 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
         for candidate in candidates:
             _objective_function(candidate, precip, pet, q_obs, warmup_days, metric,
                                 transform_kind, composite_weight, epsilon, model,
-                                names, archive)
+                                names, archive, kge_bias)
         sample_rows = archive[mark:]
 
         # the sample can find a better set than the polished optimum
@@ -266,6 +272,7 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
                 'behavioural_df': empty, 'model': model, 'epsilon': epsilon,
                 'bounds': bounds, 'seed': int(seed),
                 'composite_weight': composite_weight,
+                'kge_bias': resolve_kge_bias(transform_kind, kge_bias),
                 'behavioural_source': 'differential evolution trajectory',
                 'n_sampled': 0, 'refine_scale': float(refine_scale)}
 
@@ -291,6 +298,7 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
             'behavioural_df': behavioural_df, 'model': model, 'epsilon': epsilon,
             'bounds': bounds, 'seed': int(seed),
             'composite_weight': composite_weight,
+            'kge_bias': resolve_kge_bias(transform_kind, kge_bias),
             'behavioural_source': 'local Latin hypercube sample' if sampled
                                   else 'differential evolution trajectory',
             'n_sampled': len(sample_rows), 'refine_scale': float(refine_scale)}
