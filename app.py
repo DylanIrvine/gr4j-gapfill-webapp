@@ -505,6 +505,9 @@ st.write(
     'workflow, and you will have calibrated models and gap-filled hydrographs.\n'
     'Notably, numerous metrics are provided to ensure that you do not obtain a model with a '
     'good fit, but with highly inappropriate model parameters.\n\n'
+)
+with st.expander('Model structures and what each parameter does'):
+  st.write(
     '**Selected References**\n\n'
     'Perrin, C., Michel, C., and Andréassian, V. (2003). Improvement of a parsimonious model for '
     'streamflow simulation. Journal of Hydrology 279(1), 275-289.\n\n'
@@ -516,7 +519,7 @@ st.write(
     'simulation. Journal of Hydrology 411(1-2), 66-76.\n\n'
     'Coron, L., Thirel, G., Delaigue, O., Perrin, C., and Andréassian, V. (2017). The suite of lumped '
     'GR hydrological models in an R package. Environmental Modelling and Software 94, 166-171.'
-)
+    )
 
 # %% 1. upload
 st.subheader('1. Upload Data')
