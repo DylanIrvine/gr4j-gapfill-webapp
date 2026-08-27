@@ -494,14 +494,17 @@ def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, she
 
 
 # %% header
-st.title('GR Gap Filling Tool')
+st.title('HYDROSTITCH')
+st.subheader("HYDROlogical Signatures, Time-Series Infilling and Tools for Catchment Hydrology")
 st.write('Dylan Irvine, Charles Darwin University.\n')
 st.write(
     'The GR models (Modèle du Génie Rural à N paramètres Journalier) are simple, lumped '
     'conceptual rainfall-runoff models. They simulate daily streamflow using only '
     'catchment-averaged daily precipitation and potential evapotranspiration data. This tool '
-    'provides GR4J, GR5J and GR6J with no coding required. Upload your file, follow the '
-    'workflow, and you will have calibrated models and gap-filled hydrographs.\n\n'
+    'applies the GR4J, GR5J and GR6J models with no coding required. Upload your file, follow the '
+    'workflow, and you will have calibrated models and gap-filled hydrographs.\n'
+    'Notably, numerous metrics are provided to ensure that you do not obtain a model with a '
+    'good fit, but with highly inappropriate model parameters.'
     'References\n\n'
     'Perrin, C., Michel, C., and Andréassian, V. (2003). Improvement of a parsimonious model for '
     'streamflow simulation. Journal of Hydrology 279(1), 275-289.\n\n'
@@ -527,7 +530,7 @@ except Exception as exc:
     st.stop()
 
 section_break()
-st.subheader('Data Preview')
+st.subheader('2. Data Preview and catchment information')
 st.dataframe(df.head())
 
 columns = df.columns.tolist()
@@ -654,7 +657,7 @@ if n_observed < 730:
 
 # %% 2. model selection
 section_break()
-st.subheader('2. Model Selection')
+st.subheader('3. Model Selection')
 
 model = st.selectbox('Hydrological Model', MODELS, index=0)
 st.caption(MODEL_NOTES[model])
@@ -678,7 +681,7 @@ data_key = (uploaded_file.name, getattr(uploaded_file, 'size', len(df)), date_co
 
 # %% 3. manual simulation
 section_break()
-st.subheader('3. Manual Simulation')
+st.subheader('4. Manual Simulation')
 st.write(f'Adjust the {model} parameters by hand and assess model behaviour before running '
          'automatic calibration. All plots are in mm/d, the units the model works in. Exports can '
          'be written in mm/d, the input units, or both.')
@@ -694,7 +697,7 @@ for name in param_names:
 q_sim_manual = run_model(rain, pet, model, tuple(manual_values))
 
 section_break()
-st.subheader('Observed vs Simulated (mm/d) - using exploration parameters')
+st.subheader('Observed vs Simulated (mm/d) (exploration parameters)')
 
 col1, col2, col3 = st.columns(3)
 col1.metric('KGE', f'{kge(q_obs_mmd, q_sim_manual):.3f}')
@@ -704,16 +707,16 @@ col3.metric('KGE(1/Q)', f'{score(q_obs_mmd, q_sim_manual, "KGE", "inverse"):.3f}
 fig, _ = plot_hydrograph(dates, q_obs_mmd, [(q_sim_manual, C_SIM, model, 2)])
 show(fig, 'exploration_hydrograph')
 
-st.subheader('Residuals - using exploration parameters')
+st.subheader('Residuals (exploration parameters)')
 show(plot_log_residuals(dates, q_obs_mmd, q_sim_manual, C_SIM), 'exploration_residuals')
 
-st.subheader('Observed vs Simulated Scatter - using exploration parameters')
+st.subheader('Observed vs Simulated Scatter (exploration parameters)')
 show(plot_scatter(q_obs_mmd, q_sim_manual, C_SIM, 'Observed (mm/d)', 'Simulated (mm/d)'),
      'exploration_scatter')
 
 # %% 4. calibration
 section_break()
-st.subheader('4. Model Calibration')
+st.subheader('5. Model Calibration')
 st.write('The objective function has two parts: the efficiency criterion, and the transformation '
          'applied to both flow series before the criterion is computed. Squared-error criteria on '
          'untransformed flow are dominated by peaks, so a parameter that only affects recessions '
@@ -1198,7 +1201,7 @@ with st.expander('Advanced Parameter Diagnostics'):
 
 # %% 5. gap filling
 section_break()
-st.subheader('5. Gap Filling')
+st.subheader('6. Gap Filling')
 
 gap_method = st.selectbox('Gap Filling Method', GAP_METHODS)
 
@@ -1240,7 +1243,7 @@ show(fig_gap, 'gapfilled_hydrograph')
 # button. Gating also cuts rerun cost, because Streamlit re-executes every
 # widget above the one being changed.
 section_break()
-st.subheader('6. Further Analysis (optional)')
+st.subheader('7. Further Analysis and outputs (optional)')
 
 st.write('The gap filled series above is the main output and the download below is ready now. '
          'The analyses here are optional and add to the download package when enabled.')
@@ -1797,7 +1800,7 @@ if show_analysis:
 
 # %% 7. export
 section_break()
-st.subheader('7. Download Results')
+st.subheader('Download Results')
 
 native_label = f'{cal_units} only (as uploaded)'
 both_label = f'Both mm/d and {cal_units}'
