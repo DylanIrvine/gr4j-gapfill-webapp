@@ -512,6 +512,7 @@ st.write(
     'downward structural sensitivity analysis of hydrological models to improve low-flow '
     'simulation. Journal of Hydrology 411(1-2), 66-76.'
 )
+st.image('gr_structures.png', use_container_width=True)
 
 # %% 1. upload
 st.subheader('1. Upload Data')
