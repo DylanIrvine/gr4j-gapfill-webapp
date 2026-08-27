@@ -505,7 +505,7 @@ st.write(
     'workflow, and you will have calibrated models and gap-filled hydrographs.\n'
     'Notably, numerous metrics are provided to ensure that you do not obtain a model with a '
     'good fit, but with highly inappropriate model parameters.\n\n'
-    'References\n\n'
+    '**Selected References**\n\n'
     'Perrin, C., Michel, C., and Andréassian, V. (2003). Improvement of a parsimonious model for '
     'streamflow simulation. Journal of Hydrology 279(1), 275-289.\n\n'
     'Le Moine, N. (2008). Le bassin versant de surface vu par le souterrain: une voie d\'amélioration' 
