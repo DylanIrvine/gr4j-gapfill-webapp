@@ -508,9 +508,14 @@ st.write(
     'References\n\n'
     'Perrin, C., Michel, C., and Andréassian, V. (2003). Improvement of a parsimonious model for '
     'streamflow simulation. Journal of Hydrology 279(1), 275-289.\n\n'
+    'Le Moine, N. (2008). Le bassin versant de surface vu par le souterrain: une voie d\'amélioration' 
+    'des performances et du réalisme des modèles pluie-débit? PhD thesis (in French), UPMC, Cemagref '
+    'Antony, Paris, France, 324 pp.\n\n'
     'Pushpalatha, R., Perrin, C., Le Moine, N., Mathevet, T., and Andréassian, V. (2011). A '
     'downward structural sensitivity analysis of hydrological models to improve low-flow '
-    'simulation. Journal of Hydrology 411(1-2), 66-76.'
+    'simulation. Journal of Hydrology 411(1-2), 66-76.\n\n'
+    'Coron, L., Thirel, G., Delaigue, O., Perrin, C., and Andréassian, V. (2017). The suite of lumped '
+    'GR hydrological models in an R package. Environmental Modelling and Software 94, 166-171.'
 )
 
 # %% 1. upload
