@@ -495,7 +495,7 @@ def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, she
 
 # %% header
 st.title('HYDROSTITCH')
-st.subheader("<u>HYDRO<\u>logical <u>S<\u>ignatures, <u>T<\u>ime-<u>S<\u>eries <u>I<\u>nfilling and"
+st.subheader("<u>HYDRO<\u>logical <u>S<\u>ignatures, <u>T<\u>ime-<u>S<\u>eries <u>I<\u>nfilling and",
 "<u>T<\u>ools for <u>C<\u>atchment <u>H<\u>ydrology")
 st.write('Dylan Irvine, Charles Darwin University.\n')
 st.write(
