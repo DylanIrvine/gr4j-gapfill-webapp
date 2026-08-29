@@ -503,7 +503,7 @@ with head_text:
     st.write('Dylan Irvine, Charles Darwin University.\n')
 
 with head_logo:
-    st.image('docs/HS_Logo.png', width='stretch', vertical_alignment='center')
+    st.image('docs/HS_Logo.png', width='stretch')
 
 st.write(
     'The GR models (Modèle du Génie Rural à N paramètres Journalier) are simple, lumped '
