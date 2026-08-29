@@ -495,7 +495,7 @@ def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, she
 
 # %% header
 # %% header
-head_text, head_logo = st.columns([4, 1], vertical_alignment='center')
+head_text, head_logo = st.columns([3, 1], vertical_alignment='center')
 
 with head_text:
     st.title('HYDROSTITCH')
