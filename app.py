@@ -530,8 +530,8 @@ with st.expander('**Selected References**'):
 
 # %% 1. upload
 st.subheader('1. Upload Data')
-st.write('Upload a csv containing date, rainfall, PET, and streamflow. Dates must be in dd/mm/yyyy '
-         'format. Rain and PET must be in mm/d, but flow can be m3/s, ML/d, or mm/d.')
+st.write('Upload a csv containing date, rainfall, PET, and streamflow. Select the date format '
+         'below after uploading. Rain and PET must be in mm/d, but flow can be m3/s, ML/d, or mm/d.')
 
 uploaded_file = st.file_uploader('Upload CSV', type=['csv'])
 
@@ -554,13 +554,22 @@ rain_col = st.selectbox('Rain Column', columns)
 pet_col = st.selectbox('PET Column', columns)
 flow_col = st.selectbox('Flow Column', columns)
 
+DATE_FORMATS = {
+    'dd/mm/yyyy': '%d/%m/%Y',
+    'mm/dd/yyyy': '%m/%d/%Y',
+    'yyyy/mm/dd': '%Y/%m/%d',
+}
+date_format_label = st.selectbox('Date Format', list(DATE_FORMATS), index=0)
+
 section_break()
 st.subheader('Catchment Information')
 area_km2 = st.number_input('Catchment Area (km²)', min_value=0.001, value=1000.0, step=1.0)
 flow_units = st.selectbox('Flow Units', FLOW_UNITS)
 
 try:
-    dates = pd.to_datetime(df[date_col], dayfirst=True)
+    #dates = pd.to_datetime(df[date_col], dayfirst=True)
+    date_strings = df[date_col].astype(str).str.strip().str.replace(r'[-.]', '/', regex=True)
+    dates = pd.to_datetime(date_strings, format=DATE_FORMATS[date_format_label])
     rain = np.asarray(df[rain_col], dtype=float)
     pet = np.asarray(df[pet_col], dtype=float)
     flow = np.asarray(df[flow_col], dtype=float)
