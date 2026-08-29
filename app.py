@@ -494,9 +494,17 @@ def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, she
 
 
 # %% header
-st.title('HYDROSTITCH')
-st.subheader("**HYDRO**logical **S**ignatures, **T**ime-**S**eries **I**nfilling and **T**ools for **C**atchment **H**ydrology")
-st.write('Dylan Irvine, Charles Darwin University.\n')
+# %% header
+head_text, head_logo = st.columns([4, 1], vertical_alignment='center')
+
+with head_text:
+    st.title('HYDROSTITCH')
+    st.subheader("**HYDRO**logical **S**ignatures, **T**ime-**S**eries **I**nfilling and **T**ools for **C**atchment **H**ydrology")
+    st.write('Dylan Irvine, Charles Darwin University.\n')
+
+with head_logo:
+    st.image('docs/HS_Logo.png', width=140)
+
 st.write(
     'The GR models (Modèle du Génie Rural à N paramètres Journalier) are simple, lumped '
     'conceptual rainfall-runoff models. They simulate daily streamflow using only '
