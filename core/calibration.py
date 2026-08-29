@@ -29,8 +29,15 @@ PENALTY = 1e9
 # %%
 def _objective_function(params, precip, pet, q_obs, warmup_days, metric,
                         transform_kind, composite_weight, epsilon, model, names,
-                        archive, kge_bias='auto'):
-    """Negative criterion, with every valid evaluation appended to archive."""
+                        archive, kge_bias='auto', fit_mask=None):
+    """Negative criterion, with every valid evaluation appended to archive.
+
+    fit_mask, when given, is a boolean array the length of the record that is
+    True on days eligible for the objective. It is how a calibration and
+    validation split is enforced: the held-out days are set False here, so no
+    parameter set is ever scored against them, while the simulation itself still
+    runs over the whole record so model state stays continuous across the gap.
+    """
     param_dict = dict(zip(names, [float(p) for p in params]))
 
     q_sim = simulate(precip, pet, param_dict, model=model)
@@ -38,6 +45,9 @@ def _objective_function(params, precip, pet, q_obs, warmup_days, metric,
     mask = np.isfinite(q_obs) & np.isfinite(q_sim)
     if warmup_days > 0:
         mask[:warmup_days] = False
+
+    if fit_mask is not None:
+        mask &= fit_mask
 
     if mask.sum() < MIN_FITTING_DAYS:
         return PENALTY
@@ -75,7 +85,8 @@ def _behavioural_frame(rows, best_score, delta, names):
 def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE',
                  transform_kind='none', composite_weight=None, maxiter=25, popsize=12,
                  behavioural_delta=0.05, seed=1, bounds=None, refine_sample=0,
-                 refine_scale=0.15, kge_bias='auto', progress_callback=None):
+                 refine_scale=0.15, kge_bias='auto', fit_mask=None,
+                 progress_callback=None):
     """Calibrate a GR model and return the best parameter set plus an archive.
 
     Parameters
@@ -170,8 +181,18 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
                              f'{composite_weight}.')
 
     # the transform offset is fixed once from the observations, so every
-    # candidate parameter set is scored against exactly the same criterion
-    epsilon = epsilon_from_obs(q_obs)
+    # candidate parameter set is scored against exactly the same criterion.
+    # When a calibration/validation split is in force the offset is taken from
+    # the fitted (seen) days only, so the held-out period does not inform the
+    # criterion. With no split fit_mask is None and this reduces to the whole
+    # record, so the offset is identical to the unsplit case.
+    if fit_mask is not None:
+        fit_mask = np.asarray(fit_mask, dtype=bool)
+        if fit_mask.shape != q_obs.shape:
+            raise ValueError('fit_mask must be the same length as q_obs.')
+        epsilon = epsilon_from_obs(q_obs[fit_mask])
+    else:
+        epsilon = epsilon_from_obs(q_obs)
 
     archive = []
 
@@ -183,7 +204,8 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
         _objective_function,
         bounds=bounds_list,
         args=(precip, pet, q_obs, warmup_days, metric, transform_kind,
-              composite_weight, epsilon, model, names, archive, kge_bias),
+              composite_weight, epsilon, model, names, archive, kge_bias,
+              fit_mask),
         maxiter=maxiter,
         popsize=popsize,
         seed=seed,
@@ -256,7 +278,7 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
         for candidate in candidates:
             _objective_function(candidate, precip, pet, q_obs, warmup_days, metric,
                                 transform_kind, composite_weight, epsilon, model,
-                                names, archive, kge_bias)
+                                names, archive, kge_bias, fit_mask)
         sample_rows = archive[mark:]
 
         # the sample can find a better set than the polished optimum
