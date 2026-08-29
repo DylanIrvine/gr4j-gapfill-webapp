@@ -503,7 +503,7 @@ with head_text:
     st.write('Dylan Irvine, Charles Darwin University.\n')
 
 with head_logo:
-    st.image('docs/HS_Logo.png', width='stretch')
+    st.image('docs/HS_Logo.png', width='stretch', vertical_alignment='center')
 
 st.write(
     'The GR models (Modèle du Génie Rural à N paramètres Journalier) are simple, lumped '
@@ -681,7 +681,7 @@ with st.expander('Model structures and what each parameter does'):
              caption='Production module shared by all three models, and the routing '
                      'differences between GR4J, GR5J and GR6J. Structure after '
                      'Perrin et al. (2003), Le Moine (2008) and Pushpalatha et al. (2011).',
-             use_container_width=True)
+             width='stretch')
 
     st.markdown("""
 **Three differences that are easy to misread.**
