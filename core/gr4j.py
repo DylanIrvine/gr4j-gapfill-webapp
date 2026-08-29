@@ -1,4 +1,4 @@
-#%%
+#==== The main GR4J, 5J and 6J functions
 import math
 import numpy as np
 from math import tanh
