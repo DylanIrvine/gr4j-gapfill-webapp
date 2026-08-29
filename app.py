@@ -100,11 +100,27 @@ GR6J_MIN_WARMUP = 1095
 # the script in place when new source is deployed, so stored results can outlive
 # the code that wrote them. Increment whenever a key is added, renamed or
 # removed, and stale results are discarded rather than raising a KeyError.
-CAL_SCHEMA = 5
+CAL_SCHEMA = 6
 
 FLOW_UNITS = ['m3/s', 'ML/d', 'mm/d']
 UNIT_SUFFIX = {'m3/s': 'm3s', 'ML/d': 'MLd', 'mm/d': 'mmd'}
 FLOW_SERIES = ['Observed', 'Gapfilled', 'P05', 'P50', 'P95']
+
+# Calibration / validation split. The hold-out period is withheld from the
+# objective and used only to measure performance on days the model never saw
+# during fitting. It is a single continuous run: the model still simulates over
+# the whole record, only the objective and the reported metrics are windowed.
+HOLDOUT_POSITIONS = ['Most recent years', 'First years after the warm-up']
+# Days of calibration data left after warm-up and hold-out below which the
+# calibration is blocked (it would mostly hit the objective's penalty floor) or
+# merely warned about. These are guides, not physics; the point is that a
+# hold-out on a short record weakens the delivered model, it does not only
+# shrink the sample the score is measured on.
+MIN_CAL_DAYS_BLOCK = 200
+MIN_CAL_DAYS_WARN = 730
+# The four criteria reported per period, mirroring the whole-record panel.
+PERIOD_METRICS = [('KGE(Q)', 'KGE', 'none'), ('NSE(Q)', 'NSE', 'none'),
+                  ('KGE(log Q)', 'KGE', 'log'), ('KGE(1/Q)', 'KGE', 'inverse')]
 
 PARAM_DEFAULTS = {'X1': 500.0, 'X2': 0.0, 'X3': 100.0, 'X4': 2.0, 'X5': 0.0, 'X6': 10.0}
 
@@ -121,7 +137,7 @@ GAP_METHODS = ['Behavioural Median', 'Endpoint Snapped Residuals',
 REQUIRED_ARGUMENTS = {
     'core/calibration.py': (calibrate_gr, ['model', 'transform_kind', 'composite_weight',
                                           'bounds', 'seed', 'refine_sample',
-                                          'kge_bias', 'progress_callback']),
+                                          'kge_bias', 'fit_mask', 'progress_callback']),
     'core/models.py': (simulate, ['model']),
     'core/metrics.py': (score, ['metric', 'transform_kind']),
 }
@@ -228,10 +244,13 @@ def plot_hydrograph(dates, q_obs, series, log_y=False):
     return fig, ax
 
 
-def plot_log_residuals(dates, q_obs, q_mod, colour):
+def plot_log_residuals(dates, q_obs, q_mod, colour, holdout_mask=None):
     fig, ax = new_fig(17, 6, [0.10, 0.18, 0.85, 0.72])
     ax.plot(dates, np.log(q_obs + EPS) - np.log(q_mod + EPS), color=colour, linewidth=0.8)
     ax.axhline(0, color='black', linewidth=0.8)
+    shade_periods(ax, dates, holdout_mask)
+    if holdout_mask is not None and np.any(holdout_mask):
+        ax.legend(loc='upper right', fontsize=7)
     ax.set_xlabel('Date')
     ax.set_ylabel('Log Residual')
     return fig
@@ -305,6 +324,176 @@ def plot_parameter_pairs(behavioural_df, names, best_params):
 
 def longest_gap(series):
     return max([g['length_days'] for g in identify_gaps(series)], default=0)
+
+
+# %% calibration / validation split helpers
+def holdout_mask_from_dates(dates, warmup_days, holdout_years, position):
+    """Boolean array, True where a day falls in the held-out validation period.
+
+    The hold-out is defined in calendar time from the dates, not by index, so it
+    means the same thing regardless of gaps in the record. 'Most recent years'
+    takes the last holdout_years of the record; 'First years after the warm-up'
+    takes that span starting from the first day past the warm-up. Fractional
+    years are allowed and interpreted as 365.25-day units.
+    """
+    di = pd.DatetimeIndex(pd.to_datetime(dates))
+    n = len(di)
+    mask = np.zeros(n, dtype=bool)
+
+    if not holdout_years or holdout_years <= 0 or n == 0:
+        return mask
+
+    span = pd.Timedelta(days=float(holdout_years) * 365.25)
+
+    if position == HOLDOUT_POSITIONS[0]:            # most recent years
+        cutoff = di.max() - span
+        mask = np.asarray(di > cutoff, dtype=bool)
+    else:                                            # first years after warm-up
+        if warmup_days >= n:
+            return mask
+        start = di[int(warmup_days)]
+        mask = np.asarray((di >= start) & (di < start + span), dtype=bool)
+
+    return mask
+
+
+def period_labels(n, warmup_days, holdout_mask):
+    """Per-day label: Warm-up, Validation, or Calibration.
+
+    Warm-up wins where it overlaps the hold-out, since a warm-up day is never
+    scored under either heading. Only the recent-years hold-out on a very short
+    record can produce such an overlap.
+    """
+    labels = np.full(n, 'Calibration', dtype=object)
+    if holdout_mask is not None:
+        labels[np.asarray(holdout_mask, dtype=bool)] = 'Validation'
+    if warmup_days > 0:
+        labels[:int(warmup_days)] = 'Warm-up'
+    return labels
+
+
+def scoring_masks(q_obs, warmup_days, holdout_mask):
+    """Return (calibration, validation) boolean masks for reporting metrics.
+
+    Both exclude the warm-up and any non-finite observation, so a period score
+    is computed only on days that were genuinely available. The validation mask
+    is the held-out days; the calibration mask is everything else that was
+    scored during fitting.
+    """
+    n = len(q_obs)
+    warm = np.arange(n) < int(warmup_days)
+    finite = np.isfinite(q_obs)
+    if holdout_mask is None:
+        hold = np.zeros(n, dtype=bool)
+    else:
+        hold = np.asarray(holdout_mask, dtype=bool)
+    val = hold & ~warm & finite
+    cal = ~hold & ~warm & finite
+    return cal, val
+
+
+def period_efficiency(q_obs, q_sim, mask, epsilon):
+    """The four reported criteria over the days in mask, at a fixed offset.
+
+    epsilon is passed through so the log and inverse criteria use the same
+    transform offset for every period, which is what makes a calibration value
+    and a validation value directly comparable.
+    """
+    if mask is None or not np.any(mask):
+        return {label: np.nan for label, _, _ in PERIOD_METRICS}
+    o, s = q_obs[mask], q_sim[mask]
+    return {label: score(o, s, metric, transform, epsilon=epsilon)
+            for label, metric, transform in PERIOD_METRICS}
+
+
+def holdout_representativeness(dates, rain, q_obs, holdout_mask, warmup_days,
+                              min_year_days=360, min_years=3):
+    """Place the held-out window against the record, to guard against reading a
+    validation number from a period that was unusually wet or dry.
+
+    Rainfall uses the full forcing, which is complete by this point; observed
+    flow uses observed days only. The headline is a percentile of the hold-out's
+    annual-equivalent rainfall (its mean daily rainfall scaled to a year) among
+    the record's complete calendar years, which answers 'how wet a year was this
+    like' without depending on the water-year configuration set later. When the
+    record spans too few complete years for that to mean anything, it falls back
+    to the ratio of the hold-out means to the calibration-period means, which
+    needs no distribution. A value far from the middle (or from 100 per cent)
+    means the split is testing transfer to conditions unlike the calibration
+    data rather than a like-for-like hold-out.
+    """
+    di = pd.DatetimeIndex(pd.to_datetime(dates))
+    hold = np.asarray(holdout_mask, dtype=bool)
+    n = len(di)
+
+    out = {'ok': bool(hold.any())}
+    if not out['ok']:
+        return out
+
+    warm = np.arange(n) < int(warmup_days)
+    cal_days = ~hold & ~warm
+    rain = np.asarray(rain, dtype=float)
+    q = np.asarray(q_obs, dtype=float)
+
+    ho_rain = float(np.nanmean(rain[hold]))
+    cal_rain = float(np.nanmean(rain[cal_days])) if cal_days.any() else np.nan
+    out['rain_ratio'] = (ho_rain / cal_rain
+                         if np.isfinite(cal_rain) and cal_rain > 0 else np.nan)
+
+    ho_qmask, cal_qmask = hold & np.isfinite(q), cal_days & np.isfinite(q)
+    ho_flow = float(np.nanmean(q[ho_qmask])) if ho_qmask.any() else np.nan
+    cal_flow = float(np.nanmean(q[cal_qmask])) if cal_qmask.any() else np.nan
+    out['flow_ratio'] = (ho_flow / cal_flow
+                         if np.isfinite(cal_flow) and cal_flow > 0 and np.isfinite(ho_flow)
+                         else np.nan)
+
+    # percentile of annual-equivalent rainfall among complete calendar years
+    years = di.year.to_numpy()
+    unique_years = np.unique(years)
+    rain_totals = [float(np.nansum(rain[years == y])) for y in unique_years
+                   if (years == y).sum() >= min_year_days]
+    out['n_complete_years'] = len(rain_totals)
+
+    if len(rain_totals) >= min_years:
+        totals = np.asarray(rain_totals)
+        out['rain_percentile'] = 100.0 * float(np.mean(totals < ho_rain * 365.25))
+
+        flow_totals = [float(np.nansum(q[(years == y) & np.isfinite(q)])) for y in unique_years
+                       if ((years == y) & np.isfinite(q)).sum() >= min_year_days]
+        if len(flow_totals) >= min_years and np.isfinite(ho_flow):
+            ftot = np.asarray(flow_totals)
+            out['flow_percentile'] = 100.0 * float(np.mean(ftot < ho_flow * 365.25))
+
+    return out
+
+
+def shade_periods(ax, dates, mask, colour='0.85', label='Validation (unseen)'):
+    """Shade the contiguous runs where mask is True, behind everything else.
+
+    A single legend entry is emitted for the first run only, so the legend is
+    not cluttered by one entry per block. Does nothing when the mask is empty,
+    so plots with no hold-out are unchanged.
+    """
+    if mask is None:
+        return
+    m = np.asarray(mask, dtype=bool)
+    if not m.any():
+        return
+
+    di = pd.DatetimeIndex(pd.to_datetime(dates))
+    edges = np.diff(m.astype(np.int8))
+    starts = list(np.where(edges == 1)[0] + 1)
+    ends = list(np.where(edges == -1)[0] + 1)
+    if m[0]:
+        starts = [0] + starts
+    if m[-1]:
+        ends = ends + [len(m)]
+
+    first = True
+    for s, e in zip(starts, ends):
+        ax.axvspan(di[s], di[e - 1], color=colour, alpha=0.6, linewidth=0,
+                   zorder=0, label=label if first else None)
+        first = False
 
 
 # %% cached computation
@@ -420,7 +609,8 @@ def build_results_zip(workbook_bytes, workbook_name, figures, readme_text, produ
 
 
 # %% export table builders
-def build_output_df(dates, series_mmd, units, area_km2, include_mmd, include_native):
+def build_output_df(dates, series_mmd, units, area_km2, include_mmd, include_native,
+                    warmup_days=0, holdout_mask=None):
     data = {'Date': dates}
 
     if include_mmd:
@@ -433,6 +623,7 @@ def build_output_df(dates, series_mmd, units, area_km2, include_mmd, include_nat
             data[f'{name}_{suffix}'] = from_mmd(series_mmd[name], units, area_km2)
 
     data['FilledFlag'] = np.isnan(series_mmd['Observed']).astype(int)
+    data['Period'] = period_labels(len(np.asarray(dates)), warmup_days, holdout_mask)
     return pd.DataFrame(data)
 
 
@@ -476,6 +667,44 @@ def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, she
         ('Forcing interpolated', str(cal['forcing_interpolated'])),
     ]
 
+    # Calibration / validation split. Reported here so the workbook records
+    # whether the metrics are in-sample or a genuine hold-out test, and which
+    # days were withheld.
+    if cal.get('holdout_years', 0):
+        items.append(('Validation hold-out (years)', f"{cal['holdout_years']:g}"))
+        items.append(('Validation hold-out position', str(cal.get('holdout_position', ''))))
+        val_range = cal.get('val_date_range')
+        if val_range:
+            items.append(('Validation period', f'{val_range[0]} to {val_range[1]}'))
+        items.append(('Validation days scored', str(cal.get('n_val_scored', 0))))
+        items.append(('Calibration days scored', str(cal.get('n_cal_scored', 0))))
+        items.append(('Delivered model refit on all data', 'no (single run, hold-out excluded)'))
+
+        rep = cal.get('representativeness') or {}
+        if rep.get('ok'):
+            if 'rain_percentile' in rep:
+                value = (f"rainfall {rep['rain_percentile']:.0f}th percentile of "
+                         f"{rep['n_complete_years']} complete years")
+                if 'flow_percentile' in rep:
+                    value += f", flow {rep['flow_percentile']:.0f}th percentile"
+                items.append(('Hold-out representativeness', value))
+            elif np.isfinite(rep.get('rain_ratio', np.nan)):
+                value = f"rainfall {100 * rep['rain_ratio']:.0f}% of calibration-period mean"
+                if np.isfinite(rep.get('flow_ratio', np.nan)):
+                    value += f", flow {100 * rep['flow_ratio']:.0f}%"
+                items.append(('Hold-out representativeness', value + ' (record too short for a '
+                                                                    'percentile)'))
+
+        scores = cal.get('period_scores')
+        if scores:
+            for label, _, _ in PERIOD_METRICS:
+                items.append((f'{label} calibration',
+                              f"{scores['calibration'][label]:.4f}"))
+                items.append((f'{label} validation (unseen)',
+                              f"{scores['validation'][label]:.4f}"))
+    else:
+        items.append(('Validation hold-out', 'none (calibrated on all observed data)'))
+
     bounds = cal['bounds']
     items.append(('Parameter bounds', 'manually set' if cal['bounds_customised'] else 'defaults'))
 
@@ -487,6 +716,7 @@ def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, she
     items += [
         ('P05, P50, P95', 'Percentiles across the behavioural ensemble, per day'),
         ('FilledFlag', '1 where the observed record was missing and has been filled'),
+        ('Period', 'Warm-up, Calibration or Validation membership of each day'),
         ('Model implementation', 'Transcribed from airGR Fortran and verified against it'),
     ]
 
@@ -847,6 +1077,61 @@ if model == 'GR6J' and warmup_days < GR6J_MIN_WARMUP:
                f'only {warmup_days} warm-up days the calibration may be fitting the spin-up rather '
                f'than the catchment. At least {GR6J_MIN_WARMUP} days is safer.')
 
+# %% calibration / validation split
+st.markdown('**Validation hold-out**')
+st.write('Optionally withhold a block of years from calibration and use it only to measure how '
+         'the model performs on days it never saw during fitting. This is a single run: the model '
+         'is calibrated on the remaining days and that same model is what gap fills and is '
+         'downloaded, so the validation score describes the model you actually get. Set the '
+         'hold-out to 0 to calibrate on all data.')
+
+col_h1, col_h2 = st.columns(2)
+holdout_years = float(col_h1.number_input('Hold-out length (years)', value=0.0, min_value=0.0,
+                                          step=1.0,
+                                          help='Years of observed flow withheld from '
+                                               'calibration. 0 uses all data.'))
+holdout_position = col_h2.selectbox('Hold-out position', HOLDOUT_POSITIONS, index=0,
+                                    disabled=holdout_years <= 0,
+                                    help='Whether the withheld years are taken from the end of '
+                                         'the record or from just after the warm-up.')
+
+holdout_mask = holdout_mask_from_dates(dates, warmup_days, holdout_years, holdout_position)
+fit_mask = None if holdout_years <= 0 else ~holdout_mask
+holdout_ok = True
+
+if holdout_years > 0:
+    cal_score_mask, val_score_mask = scoring_masks(q_obs_mmd, warmup_days, holdout_mask)
+    n_cal_left = int(cal_score_mask.sum())
+    n_val = int(val_score_mask.sum())
+    di_all = pd.DatetimeIndex(pd.to_datetime(dates))
+
+    st.caption('The warm-up period above already removes the first '
+               f'{warmup_days} days from fitting. A hold-out removes more on top of that. On a '
+               'short record a long hold-out is unwise: because this is a single run with no '
+               'refit, the days you withhold are gone from the delivered model for good, so it is '
+               'fit on less data and is weaker for it, not merely measured on a smaller sample. '
+               'Keep the hold-out short relative to the record.')
+
+    if n_val > 0:
+        val_dates = di_all[val_score_mask]
+        st.write(f'Validation period: {val_dates.min():%Y-%m-%d} to {val_dates.max():%Y-%m-%d}, '
+                 f'{n_val} observed days (about {n_val / 365.25:.1f} years). '
+                 f'Calibration data left after warm-up and hold-out: {n_cal_left} days '
+                 f'(about {n_cal_left / 365.25:.1f} years).')
+    else:
+        st.warning('The hold-out as configured contains no observed flow, so there is nothing to '
+                   'validate against. Change its length or position.')
+
+    if n_cal_left < MIN_CAL_DAYS_BLOCK:
+        st.error(f'Only {n_cal_left} days of observed flow remain for calibration after the '
+                 f'warm-up and hold-out, below the {MIN_CAL_DAYS_BLOCK} needed for a meaningful '
+                 'fit. Shorten the hold-out or the warm-up.')
+        holdout_ok = False
+    elif n_cal_left < MIN_CAL_DAYS_WARN:
+        st.warning(f'Only about {n_cal_left / 365.25:.1f} years of observed flow remain for '
+                   'calibration after the warm-up and hold-out. The fit and every output derived '
+                   'from it rest on a short record; treat the results with corresponding caution.')
+
 st.write('Models within this distance of the best objective score are retained as behavioural '
          'models, up to 200 configurations.')
 behavioural_delta = st.number_input('Behavioural Model Delta', value=0.05, min_value=0.001,
@@ -960,7 +1245,7 @@ st.caption(f'About {_evals:,} model evaluations, roughly '
 if not bounds_valid:
     st.error('Fix the parameter bounds above before calibrating.')
 
-if st.button('Calibrate', type='primary', disabled=not bounds_valid,
+if st.button('Calibrate', type='primary', disabled=not (bounds_valid and holdout_ok),
              use_container_width=True):
 
     cal_bar = st.progress(0.0, text=f'Calibrating {model}...')
@@ -980,6 +1265,7 @@ if st.button('Calibrate', type='primary', disabled=not bounds_valid,
                                seed=seed,
                                refine_sample=refine_sample if refine else 0,
                                refine_scale=refine_scale,
+                               fit_mask=fit_mask,
                                progress_callback=report_progress)
 
     cal_bar.empty()
@@ -1023,6 +1309,12 @@ if st.button('Calibrate', type='primary', disabled=not bounds_valid,
         'bounds': cal_results['bounds'],
         'bounds_customised': bool(custom_bounds),
         'warmup_days': warmup_days,
+        'holdout_years': float(holdout_years),
+        'holdout_position': holdout_position if holdout_years > 0 else None,
+        'holdout_mask': holdout_mask if holdout_years > 0 else None,
+        'representativeness': (holdout_representativeness(dates, rain, q_obs_mmd,
+                                                         holdout_mask, warmup_days)
+                               if holdout_years > 0 else None),
         'flow_units': flow_units,
         'area_km2': float(area_km2),
         'forcing_interpolated': forcing_interpolated,
@@ -1185,23 +1477,90 @@ if cal['bounds_customised']:
 
 # criteria across transformations, so the trade-off is visible
 st.subheader('Best Model Performance')
-cols = st.columns(4)
-cols[0].metric('KGE(Q)', f'{score(q_obs, q_cal, "KGE", "none"):.3f}')
-cols[1].metric('NSE(Q)', f'{score(q_obs, q_cal, "NSE", "none"):.3f}')
-cols[2].metric('KGE(log Q)', f'{score(q_obs, q_cal, "KGE", "log"):.3f}')
-cols[3].metric('KGE(1/Q)', f'{score(q_obs, q_cal, "KGE", "inverse"):.3f}')
-st.caption('Reported over the whole record including warm-up, so these differ slightly from the '
-           'calibration score, which excludes the warm-up period.')
+
+cal_score_mask, val_score_mask = scoring_masks(q_obs, cal['warmup_days'], cal.get('holdout_mask'))
+
+if cal.get('holdout_years', 0) and val_score_mask.any():
+    # Per-period efficiency. Both columns use the calibration-derived offset held
+    # in cal['epsilon'], so the log and inverse criteria are on the same footing
+    # across periods and the two columns can be read against each other.
+    cal_scores = period_efficiency(q_obs, q_cal, cal_score_mask, cal['epsilon'])
+    val_scores = period_efficiency(q_obs, q_cal, val_score_mask, cal['epsilon'])
+
+    perf = pd.DataFrame({
+        'Metric': [label for label, _, _ in PERIOD_METRICS],
+        'Calibration (seen)': [cal_scores[label] for label, _, _ in PERIOD_METRICS],
+        'Validation (unseen)': [val_scores[label] for label, _, _ in PERIOD_METRICS],
+    })
+    perf['Change'] = perf['Validation (unseen)'] - perf['Calibration (seen)']
+    st.dataframe(perf.round(3), hide_index=True, use_container_width=True)
+
+    # kept on the cal dict so the export section and readme report the same
+    # numbers without recomputing them
+    cal['period_scores'] = {'calibration': cal_scores, 'validation': val_scores}
+    cal['n_cal_scored'] = int(cal_score_mask.sum())
+    cal['n_val_scored'] = int(val_score_mask.sum())
+    _val_dates = pd.DatetimeIndex(pd.to_datetime(cal_dates))[val_score_mask]
+    cal['val_date_range'] = (f'{_val_dates.min():%Y-%m-%d}', f'{_val_dates.max():%Y-%m-%d}')
+
+    st.caption('The validation column is computed on the held-out days, which the delivered model '
+               'never saw during fitting, so it is the honest estimate of how well the gap filling '
+               'performs on unseen data. The delivered model is this same model, not a separate '
+               'full-record fit, so these numbers describe what you download. A large fall from '
+               'the calibration column to the validation column is the signature of overfitting '
+               'or parameters that do not transfer across the conditions in the two periods. Both '
+               'columns exclude the warm-up and use a shared transform offset. The validation '
+               'block spans a sustained stretch with no nearby observed flow, which is harder than '
+               'the shorter interior gaps that make up most fills, so read it as a conservative '
+               'floor rather than an exact interior-gap skill.')
+
+    rep = cal.get('representativeness')
+    if rep and rep.get('ok'):
+        if 'rain_percentile' in rep:
+            line = ('Hold-out representativeness: its rainfall sits around the '
+                    f"{rep['rain_percentile']:.0f}th percentile of the "
+                    f"{rep['n_complete_years']} complete calendar years in the record")
+            if 'flow_percentile' in rep:
+                line += f", and its observed flow around the {rep['flow_percentile']:.0f}th"
+            line += ('. A hold-out far from the middle is testing the model under conditions '
+                     'unlike the calibration data: a harder and more informative test, but not a '
+                     'like-for-like one, so weigh the drop from calibration to validation with '
+                     'that in mind.')
+            st.caption(line)
+        elif np.isfinite(rep.get('rain_ratio', np.nan)):
+            line = ('Hold-out representativeness: the record has only '
+                    f"{rep['n_complete_years']} complete calendar years, too few for a "
+                    'percentile, so this is a ratio instead. The hold-out averages '
+                    f"{100 * rep['rain_ratio']:.0f} per cent of the calibration period's mean "
+                    'daily rainfall')
+            if np.isfinite(rep.get('flow_ratio', np.nan)):
+                line += f", and {100 * rep['flow_ratio']:.0f} per cent of its mean observed flow"
+            line += ('. Well away from 100 per cent means the two periods sample different '
+                     'conditions, so the validation number is a transfer test rather than a '
+                     'like-for-like one.')
+            st.caption(line)
+else:
+    cols = st.columns(4)
+    cols[0].metric('KGE(Q)', f'{score(q_obs, q_cal, "KGE", "none"):.3f}')
+    cols[1].metric('NSE(Q)', f'{score(q_obs, q_cal, "NSE", "none"):.3f}')
+    cols[2].metric('KGE(log Q)', f'{score(q_obs, q_cal, "KGE", "log"):.3f}')
+    cols[3].metric('KGE(1/Q)', f'{score(q_obs, q_cal, "KGE", "inverse"):.3f}')
+    st.caption('Reported over the whole record including warm-up, so these differ slightly from '
+               'the calibration score, which excludes the warm-up period. No validation hold-out '
+               'was set, so every observed day informed the fit and none of these numbers is an '
+               'out-of-sample test.')
 
 # hydrograph
 st.subheader('Behavioural Ensemble Hydrograph')
 fig_cal, ax = plot_hydrograph(cal_dates, q_obs, [(q50, C_CAL, 'Behavioural median', 1.5)])
 ax.fill_between(cal_dates, q05, q95, color=C_CAL, alpha=0.25, label='5-95% behavioural range')
+shade_periods(ax, cal_dates, cal.get('holdout_mask'))
 ax.legend()
 show(fig_cal, 'ensemble_hydrograph')
 
 st.subheader('Behavioural Median Residuals')
-show(plot_log_residuals(cal_dates, q_obs, q50, C_CAL), 'behavioural_median_residuals')
+show(plot_log_residuals(cal_dates, q_obs, q50, C_CAL, holdout_mask=cal.get('holdout_mask')),
+     'behavioural_median_residuals')
 
 # flow duration curve, from percentiles computed once at calibration time
 ex_obs, q_obs_fdc = fdc(q_obs)
@@ -1295,6 +1654,7 @@ st.subheader('Gap Filled Hydrograph')
 fig_gap, ax = new_fig(17, 8, [0.10, 0.15, 0.85, 0.75])
 ax.plot(cal_dates, q_gapfilled, color=C_CAL, linewidth=1, label='Gap filled')
 ax.plot(cal_dates, q_obs, color=C_OBS, linewidth=1, label='Observed')
+shade_periods(ax, cal_dates, cal.get('holdout_mask'))
 ax.set_xlabel('Date')
 ax.set_ylabel('Flow (mm/d)')
 ax.set_xlim(pd.Timestamp(cal_dates.min()), pd.Timestamp(cal_dates.max()))
@@ -1328,10 +1688,12 @@ show_analysis = col_opt2.checkbox(
          'and adds around twenty CSV products to the download.')
 
 # minimal product set, so the download works whether or not the analyses are run
-products = {'daily_flow': pd.DataFrame({'Date': cal_dates,
-                                        'Q_mmd': q_gapfilled,
-                                        'Q_MLd': q_gapfilled * cal_area,
-                                        'Filled': np.isnan(q_obs).astype(int)})}
+products = {'daily_flow': pd.DataFrame(
+    {'Date': cal_dates,
+     'Q_mmd': q_gapfilled,
+     'Q_MLd': q_gapfilled * cal_area,
+     'Filled': np.isnan(q_obs).astype(int),
+     'Period': period_labels(len(cal_dates), cal['warmup_days'], cal.get('holdout_mask'))})}
 
 if show_evaluation:
     section_break()
@@ -1473,6 +1835,7 @@ if show_analysis:
     ax.plot(cal_dates, q_gapfilled, color=C_OBS, linewidth=0.8, label='Total flow')
     ax.plot(cal_dates, q_baseflow, color=C_BASE, linewidth=1.2, label='Baseflow')
     ax.fill_between(cal_dates, 0, q_baseflow, color=C_BASE, alpha=0.3)
+    shade_periods(ax, cal_dates, cal.get('holdout_mask'))
     ax.set_xlabel('Date')
     ax.set_ylabel('Flow (mm/d)')
     ax.set_xlim(pd.Timestamp(cal_dates.min()), pd.Timestamp(cal_dates.max()))
@@ -1901,7 +2264,9 @@ series_mmd = {'Observed': q_obs, 'Gapfilled': q_gapfilled,
               'P05': q05, 'P50': q50, 'P95': q95}
 
 output_df = build_output_df(cal_dates, series_mmd, cal_units, cal_area,
-                            include_mmd, include_native)
+                            include_mmd, include_native,
+                            warmup_days=cal['warmup_days'],
+                            holdout_mask=cal.get('holdout_mask'))
 ensemble_df = build_ensemble_df(cal_dates, cal['ensemble_export'], cal_units, cal_area,
                                 ensemble_native)
 metadata_df = build_metadata_df(cal, gap_method, n_missing, n_clipped,
@@ -1911,6 +2276,7 @@ st.write('Columns in the workbook:')
 st.dataframe(pd.DataFrame({'Column': output_df.columns,
                            'Units': ['date' if c == 'Date'
                                      else 'flag' if c == 'FilledFlag'
+                                     else 'label' if c == 'Period'
                                      else cal_units if (cal_units != 'mm/d'
                                                         and c.endswith(UNIT_SUFFIX[cal_units]))
                                      else 'mm/d'
@@ -1920,6 +2286,52 @@ st.dataframe(pd.DataFrame({'Column': output_df.columns,
 workbook_bytes = build_workbook(output_df, behavioural_df, ensemble_df, metadata_df)
 
 workbook_name = f'gr_gapfill_{cal_model.lower()}_{file_tag}.xlsx'
+
+# Calibration / validation split summary for the readme. Built here so the
+# literal below can splice it in with unpacking whether or not a hold-out ran.
+if cal.get('holdout_years', 0):
+    _scores = cal.get('period_scores') or {}
+    _vr = cal.get('val_date_range')
+    holdout_readme_lines = [
+        '',
+        'Calibration / validation split',
+        f'  Hold-out: {cal["holdout_years"]:g} years, {cal.get("holdout_position", "")}',
+    ]
+    if _vr:
+        holdout_readme_lines.append(
+            f'  Validation period: {_vr[0]} to {_vr[1]} '
+            f'({cal.get("n_val_scored", 0)} scored days)')
+    holdout_readme_lines += [
+        f'  Calibration days scored: {cal.get("n_cal_scored", 0)}',
+        '  The delivered model was calibrated on the other days only and was NOT refit on',
+        '  the validation period, so the validation metrics below describe the model as',
+        '  delivered. They are the estimate of gap-fill skill on unseen data. A large fall',
+        '  from calibration to validation points to overfitting or parameters that do not',
+        '  transfer between the conditions in the two periods.',
+    ]
+    _rep = cal.get('representativeness') or {}
+    if _rep.get('ok'):
+        if 'rain_percentile' in _rep:
+            _line = (f'  Representativeness: hold-out rainfall around the '
+                     f'{_rep["rain_percentile"]:.0f}th percentile of '
+                     f'{_rep["n_complete_years"]} complete calendar years')
+            if 'flow_percentile' in _rep:
+                _line += f', observed flow around the {_rep["flow_percentile"]:.0f}th'
+            holdout_readme_lines.append(_line + '.')
+        elif np.isfinite(_rep.get('rain_ratio', np.nan)):
+            _line = (f'  Representativeness: hold-out rainfall {100 * _rep["rain_ratio"]:.0f}% '
+                     'of the calibration-period mean')
+            if np.isfinite(_rep.get('flow_ratio', np.nan)):
+                _line += f', flow {100 * _rep["flow_ratio"]:.0f}%'
+            holdout_readme_lines.append(_line + ' (record too short for a percentile).')
+    if _scores:
+        holdout_readme_lines.append('  Per-period efficiency (shared transform offset):')
+        for _label, _, _ in PERIOD_METRICS:
+            holdout_readme_lines.append(
+                f'    {_label:<11} cal {_scores["calibration"][_label]:.3f}   '
+                f'val {_scores["validation"][_label]:.3f}')
+else:
+    holdout_readme_lines = ['', 'Validation hold-out: none (calibrated on all observed data)']
 
 readme_lines = [
     'GR gap filling results package',
@@ -1935,6 +2347,7 @@ readme_lines = [
     f'Catchment area: {cal_area:g} km2',
     f'Input flow units: {cal_units}',
     f'Workbook units: {sheet_units}',
+    *holdout_readme_lines,
     '',
     'Contents',
     f'  {workbook_name}',
@@ -1953,6 +2366,8 @@ readme_lines = [
     '    of the time, which is the 90th percentile of the flow values.',
     '  PercentFilled is the share of days in that period that came from the model',
     '    rather than the gauge. Read every aggregate against it.',
+    '  Period marks each day as Warm-up, Calibration or Validation. The GapFilled sheet',
+    '    and daily_flow.csv both carry it, so seen and unseen days can be told apart.',
     '',
     'CSV products included:',
 ]
