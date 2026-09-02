@@ -748,7 +748,7 @@ st.write(
 )
 with st.expander('**Selected References**'):
   st.write(
-    'GR models:\n'
+    'GR models:\n\n'
     'Perrin, C., Michel, C., and Andréassian, V. (2003). Improvement of a parsimonious model for '
     'streamflow simulation. Journal of Hydrology 279(1), 275-289.\n\n'
     'Le Moine, N. (2008). Le bassin versant de surface vu par le souterrain: une voie d\'amélioration' 
@@ -757,11 +757,15 @@ with st.expander('**Selected References**'):
     'Pushpalatha, R., Perrin, C., Le Moine, N., Mathevet, T., and Andréassian, V. (2011). A '
     'downward structural sensitivity analysis of hydrological models to improve low-flow '
     'simulation. Journal of Hydrology 411(1-2), 66-76.\n\n'
+
+    'SIMHYD model:\n\n'
+    'Chiew, F.H.S., Peel, M.C. & Western, A.W. (2002). Application and testing of the simple rainfall-runoff '
+    ' model SIMHYD. Cooperative Research Centre for Catchment Hydrology, University of Melbourne.\n\n'
+    'Other software packages:\n\n'
+    'Andrews, F.T., Croke, B.W., Jakeman, A.J. (2011) An open software environment for hydrological '
+    'model assessment and development. Environmental Modelling & Software 26(10) 1171-1185.'
     'Coron, L., Thirel, G., Delaigue, O., Perrin, C., and Andréassian, V. (2017). The suite of lumped '
     'GR hydrological models in an R package. Environmental Modelling and Software 94, 166-171.\n\n'
-    'SIMHYD model:'
-    'Chiew, F.H.S., Peel, M.C. & Western, A.W. (2002). Application and testing of the simple rainfall-runoff '
-    ' model SIMHYD. Cooperative Research Centre for Catchment Hydrology, University of Melbourne'
     )
 
 # %% 1. upload
