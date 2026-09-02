@@ -729,20 +729,22 @@ head_text, head_logo = st.columns([3, 1], vertical_alignment='center')
 
 with head_text:
     st.title('HYDROSTITCH')
-    st.subheader("**HYDRO**logical **S**ignatures, **T**ime-**S**eries **I**nfilling and **T**ools for **C**atchment **H**ydrology")
+    st.subheader("HYDROlogical Signatures, Time-Series Infilling and Tools for Catchment Hydrology")
     st.write('Dylan Irvine, Charles Darwin University.\n')
 
 with head_logo:
     st.image('docs/HS_Logo.png', width='stretch')
 
 st.write(
-    'The GR models (Modèle du Génie Rural à N paramètres Journalier) are simple, lumped '
-    'conceptual rainfall-runoff models. They simulate daily streamflow using only '
+    'HydroSTITCH runs several lumped parameter conceptual rainfall-runoff models, calibrating the '
+    'unknown parameters, to best reproduce observed flow data. The resulting models can then be used '
+    'to gap fill hydrographs. Optionally, the continuous data can then be used to perform' 
+    'a range of hydrological  analyses. The models are set up to simulate daily streamflow using only '
     'catchment-averaged daily precipitation and potential evapotranspiration data. This tool '
-    'applies the GR4J, GR5J and GR6J models with no coding required. Upload your file, follow the '
-    'workflow, and you will have calibrated models and gap-filled hydrographs.\n'
+    'applies the GR4J, GR5J and GR6J, and SIMHYD models with no coding required. Upload your file, '
+    'follow the workflow, and you will have calibrated models and gap-filled hydrographs.\n\n'
     'Notably, numerous metrics are provided to ensure that you do not obtain a model with a '
-    'good fit, but with highly inappropriate model parameters.\n\n'
+    'good fit, but with highly inappropriate model parameters.\n\n' 
 )
 with st.expander('**Selected References**'):
   st.write(
