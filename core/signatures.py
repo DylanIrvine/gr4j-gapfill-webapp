@@ -83,10 +83,20 @@ def _month_span(year, month):
 
 # %% frame assembly
 def build_daily_frame(dates, q_mmd, filled_flag, area_km2, start_month=1,
-                      baseflow_mmd=None, ctf_flag=None):
+                      baseflow_mmd=None, ctf_flag=None, model_components=None):
     """Daily frame with period labels and both unit systems.
 
     1 mm over 1 km2 is 1 ML, so ML/d is simply mm/d multiplied by the area.
+
+    baseflow_mmd is the Lyne and Hollick digital-filter separation of the gap
+    filled series; its columns carry an _LH suffix so the method is explicit.
+
+    model_components, when given, is the runoff split produced internally by a
+    process model (SIMHYD) from its calibrated parameter set: a dict with
+    'surface', 'interflow' and 'baseflow' arrays in mm/d. These are a different
+    quantity from the Lyne and Hollick baseflow (they come from the model, not
+    from the gap filled hydrograph), so they get a _SIMHYD suffix and both sets
+    of columns sit side by side in the one frame.
     """
     dates = pd.DatetimeIndex(dates)
 
@@ -98,9 +108,21 @@ def build_daily_frame(dates, q_mmd, filled_flag, area_km2, start_month=1,
     })
 
     if baseflow_mmd is not None:
-        frame['Qbase_mmd'] = np.asarray(baseflow_mmd, dtype=float)
-        frame['Qbase_MLd'] = frame['Qbase_mmd'] * float(area_km2)
-        frame['Qquick_MLd'] = frame['Q_MLd'] - frame['Qbase_MLd']
+        frame['Qbase_LH_mmd'] = np.asarray(baseflow_mmd, dtype=float)
+        frame['Qbase_LH_MLd'] = frame['Qbase_LH_mmd'] * float(area_km2)
+        frame['Qquick_LH_MLd'] = frame['Q_MLd'] - frame['Qbase_LH_MLd']
+
+    if model_components is not None:
+        surface = np.asarray(model_components['surface'], dtype=float)
+        interflow = np.asarray(model_components['interflow'], dtype=float)
+        base = np.asarray(model_components['baseflow'], dtype=float)
+        frame['Qsurface_SIMHYD_mmd'] = surface
+        frame['Qsurface_SIMHYD_MLd'] = surface * float(area_km2)
+        frame['Qinterflow_SIMHYD_mmd'] = interflow
+        frame['Qinterflow_SIMHYD_MLd'] = interflow * float(area_km2)
+        frame['Qbase_SIMHYD_mmd'] = base
+        frame['Qbase_SIMHYD_MLd'] = base * float(area_km2)
+        frame['Qtotal_SIMHYD_mmd'] = surface + interflow + base
 
     if ctf_flag is not None:
         frame['CeaseToFlow'] = np.asarray(ctf_flag).astype(int)
@@ -207,9 +229,14 @@ def annual_maximum(frame, start_month=1):
     return pd.DataFrame(rows).sort_values('WaterYear').reset_index(drop=True)
 
 
-def annual_baseflow(frame, start_month=1):
-    """Water year baseflow totals and the baseflow index."""
-    if 'Qbase_MLd' not in frame.columns:
+def annual_baseflow(frame, start_month=1, base_col='Qbase_LH_MLd'):
+    """Water year baseflow totals and the baseflow index.
+
+    base_col selects the separation: 'Qbase_LH_MLd' for the Lyne and Hollick
+    filter, 'Qbase_SIMHYD_MLd' for the SIMHYD model's own baseflow. The output
+    schema is the same either way.
+    """
+    if base_col not in frame.columns:
         return pd.DataFrame()
 
     complete = _complete_periods(frame, 'WaterYear',
@@ -219,7 +246,7 @@ def annual_baseflow(frame, start_month=1):
     rows = []
     for year, group in subset.groupby('WaterYear'):
         total = float(group['Q_MLd'].sum())
-        base = float(group['Qbase_MLd'].sum())
+        base = float(group[base_col].sum())
         rows.append({'WaterYear': int(year),
                      'Baseflow_GL': base / 1000.0,
                      'Quickflow_GL': (total - base) / 1000.0,
@@ -389,10 +416,22 @@ def build_all_products(frame, area_km2, start_month=1):
         'monthly_distribution': monthly_distribution(monthly),
     }
 
-    if 'Qbase_MLd' in frame.columns:
-        products['daily_baseflow'] = frame[['Date', 'Q_MLd', 'Qbase_MLd', 'Qquick_MLd',
-                                            'Filled']]
-        products['annual_baseflow'] = annual_baseflow(frame, start_month)
+    if 'Qbase_LH_MLd' in frame.columns or 'Qbase_SIMHYD_MLd' in frame.columns:
+        # one combined daily table, with the method flagged in each column name
+        daily_cols = ['Date', 'Q_MLd']
+        for col in ('Qbase_LH_MLd', 'Qquick_LH_MLd',
+                    'Qsurface_SIMHYD_MLd', 'Qinterflow_SIMHYD_MLd', 'Qbase_SIMHYD_MLd'):
+            if col in frame.columns:
+                daily_cols.append(col)
+        daily_cols.append('Filled')
+        products['daily_baseflow'] = frame[daily_cols]
+
+    if 'Qbase_LH_MLd' in frame.columns:
+        products['annual_baseflow'] = annual_baseflow(frame, start_month,
+                                                      base_col='Qbase_LH_MLd')
+    if 'Qbase_SIMHYD_MLd' in frame.columns:
+        products['annual_baseflow_simhyd'] = annual_baseflow(frame, start_month,
+                                                             base_col='Qbase_SIMHYD_MLd')
 
     if 'CeaseToFlow' in frame.columns:
         products['annual_cease_to_flow'] = annual_cease_to_flow(frame, start_month)

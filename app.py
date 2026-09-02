@@ -1,5 +1,6 @@
 # app.py
-# GR gap filling web app (GR4J, GR5J, GR6J)
+# HydroSTITCH: rainfall-runoff calibration, gap filling and analysis.
+# Models: the GR family (GR4J, GR5J, GR6J) and SIMHYD.
 # Dylan Irvine, Charles Darwin University
 # Requires streamlit >= 1.30
 
@@ -15,8 +16,10 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-from core.models import (simulate, MODELS, PARAM_NAMES, PARAM_BOUNDS,
-                         PARAM_LABELS, PARAM_ROUNDING, MODEL_NOTES, NUMBA_AVAILABLE)
+from core.models import (simulate, simhyd_components, MODELS, MODEL_PARAMS,
+                         MODEL_INFO, PARAM_NAMES, PARAM_BOUNDS, PARAM_LABELS,
+                         PARAM_ROUNDING, MODEL_NOTES, STRICTLY_POSITIVE_PARAMS,
+                         SIMHYD_OVERFLOW_CHOICES, NUMBA_AVAILABLE)
 from core.metrics import (kge, nse, score, criterion_label, composite_label,
                           resolve_kge_bias, kge_bias_is_unstable,
                           METRICS, TRANSFORMS, TRANSFORM_LABELS, COMPOSITE_TRANSFORMS)
@@ -91,16 +94,15 @@ MAX_EXPORT_MODELS = 30
 MAX_HISTORY = 20
 C_BASE = '#2BA9E0'
 FIGURE_DPI = 300
-CREDIT = 'Produced with the GR gap filling tool, Charles Darwin University'
+CREDIT = 'Produced with HydroSTITCH, Charles Darwin University'
 LONG_FORCING_GAP = 5
 CACHE_TTL = 3600
-GR6J_MIN_WARMUP = 1095
 
 # Version stamp for the dict held in st.session_state['cal']. Streamlit reruns
 # the script in place when new source is deployed, so stored results can outlive
 # the code that wrote them. Increment whenever a key is added, renamed or
 # removed, and stale results are discarded rather than raising a KeyError.
-CAL_SCHEMA = 6
+CAL_SCHEMA = 7
 
 FLOW_UNITS = ['m3/s', 'ML/d', 'mm/d']
 UNIT_SUFFIX = {'m3/s': 'm3s', 'ML/d': 'MLd', 'mm/d': 'mmd'}
@@ -122,8 +124,6 @@ MIN_CAL_DAYS_WARN = 730
 PERIOD_METRICS = [('KGE(Q)', 'KGE', 'none'), ('NSE(Q)', 'NSE', 'none'),
                   ('KGE(log Q)', 'KGE', 'log'), ('KGE(1/Q)', 'KGE', 'inverse')]
 
-PARAM_DEFAULTS = {'X1': 500.0, 'X2': 0.0, 'X3': 100.0, 'X4': 2.0, 'X5': 0.0, 'X6': 10.0}
-
 GAP_METHODS = ['Behavioural Median', 'Endpoint Snapped Residuals',
                'Gaussian Process Residuals']
 
@@ -137,8 +137,9 @@ GAP_METHODS = ['Behavioural Median', 'Endpoint Snapped Residuals',
 REQUIRED_ARGUMENTS = {
     'core/calibration.py': (calibrate_gr, ['model', 'transform_kind', 'composite_weight',
                                           'bounds', 'seed', 'refine_sample',
-                                          'kge_bias', 'fit_mask', 'progress_callback']),
-    'core/models.py': (simulate, ['model']),
+                                          'kge_bias', 'fit_mask', 'progress_callback',
+                                          'simhyd_overflow_to_gw']),
+    'core/models.py': (simulate, ['model', 'simhyd_overflow_to_gw']),
     'core/metrics.py': (score, ['metric', 'transform_kind']),
 }
 
@@ -498,9 +499,10 @@ def shade_periods(ax, dates, mask, colour='0.85', label='Validation (unseen)'):
 
 # %% cached computation
 @st.cache_data(show_spinner=False, max_entries=8, ttl=CACHE_TTL)
-def run_model(rain, pet, model, param_values):
+def run_model(rain, pet, model, param_values, simhyd_overflow_to_gw=False):
     params = dict(zip(PARAM_NAMES[model], param_values))
-    return simulate(rain, pet, params, model=model)
+    return simulate(rain, pet, params, model=model,
+                    simhyd_overflow_to_gw=simhyd_overflow_to_gw)
 
 
 @st.cache_data(show_spinner='Gap filling...', max_entries=3, ttl=CACHE_TTL)
@@ -515,6 +517,18 @@ def run_gapfill(q_obs, q50, method):
 @st.cache_data(show_spinner='Separating baseflow...', max_entries=3, ttl=CACHE_TTL)
 def run_baseflow(q, alpha, passes, n_reflect):
     return lyne_hollick(q, alpha=alpha, passes=passes, n_reflect=n_reflect)
+
+
+@st.cache_data(show_spinner=False, max_entries=4, ttl=CACHE_TTL)
+def run_simhyd_components(rain, pet, param_values, overflow_to_gw=False):
+    """SIMHYD's internal runoff split for the calibrated parameter set.
+
+    This is the model's own baseflow, computed by re-running SIMHYD over the
+    whole record; it is not a separation of the gap filled series. overflow_to_gw
+    must match whatever the calibration used.
+    """
+    params = dict(zip(PARAM_NAMES['SIMHYD'], param_values))
+    return simhyd_components(rain, pet, params, overflow_to_gw=overflow_to_gw)
 
 
 @st.cache_data(show_spinner='Evaluating against signatures...', max_entries=3, ttl=CACHE_TTL)
@@ -724,7 +738,6 @@ def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, she
 
 
 # %% header
-# %% header
 head_text, head_logo = st.columns([3, 1], vertical_alignment='center')
 
 with head_text:
@@ -738,20 +751,20 @@ with head_logo:
 st.write(
     'HydroSTITCH runs several lumped parameter conceptual rainfall-runoff models, calibrating the '
     'unknown parameters, to best reproduce observed flow data. The resulting models can then be used '
-    'to gap fill hydrographs. Optionally, the continuous data can then be used to perform' 
-    'a range of hydrological  analyses. The models are set up to simulate daily streamflow using only '
+    'to gap fill hydrographs. Optionally, the continuous data can then be used to perform '
+    'a range of hydrological analyses. The models are set up to simulate daily streamflow using only '
     'catchment-averaged daily precipitation and potential evapotranspiration data. This tool '
     'applies the GR4J, GR5J and GR6J, and SIMHYD models with no coding required. Upload your file, '
     'follow the workflow, and you will have calibrated models and gap-filled hydrographs.\n\n'
     'Notably, numerous metrics are provided to ensure that you do not obtain a model with a '
-    'good fit, but with highly inappropriate model parameters.\n\n' 
+    'good fit, but with highly inappropriate model parameters.\n\n'
 )
 with st.expander('**Selected References**'):
   st.write(
     'GR models:\n\n'
     'Perrin, C., Michel, C., and Andréassian, V. (2003). Improvement of a parsimonious model for '
     'streamflow simulation. Journal of Hydrology 279(1), 275-289.\n\n'
-    'Le Moine, N. (2008). Le bassin versant de surface vu par le souterrain: une voie d\'amélioration' 
+    'Le Moine, N. (2008). Le bassin versant de surface vu par le souterrain: une voie d\'amélioration'
     'des performances et du réalisme des modèles pluie-débit? PhD thesis (in French), UPMC, Cemagref '
     'Antony, Paris, France.\n\n'
     'Pushpalatha, R., Perrin, C., Le Moine, N., Mathevet, T., and Andréassian, V. (2011). A '
@@ -761,6 +774,9 @@ with st.expander('**Selected References**'):
     'SIMHYD model:\n\n'
     'Chiew, F.H.S., Peel, M.C. & Western, A.W. (2002). Application and testing of the simple rainfall-runoff '
     ' model SIMHYD. Cooperative Research Centre for Catchment Hydrology, University of Melbourne.\n\n'
+    'Chiew, F.H.S., Teng, J., Vaze, J., Post, D.A., Perraud, J.M., Kirono, D.G.C., and Viney, N.R. '
+    '(2009). Estimating climate change impact on runoff across southeast Australia: Method, results '
+    'and implications of the modeling method. Water Resources Research 45, W10414.\n\n'
     'Other software packages:\n\n'
     'Andrews, F.T., Croke, B.W., Jakeman, A.J. (2011) An open software environment for hydrological '
     'model assessment and development. Environmental Modelling & Software 26(10) 1171-1185.\n\n'
@@ -924,40 +940,22 @@ section_break()
 st.subheader('3. Model Selection')
 
 model = st.selectbox('Hydrological Model', MODELS, index=0)
-st.caption(MODEL_NOTES[model])
+model_info = MODEL_INFO[model]
+st.caption(model_info.notes)
 with st.expander('Model structures and what each parameter does'):
-    st.image('docs/gr_structures.png',
-             caption='Production module shared by all three models, and the routing '
-                     'differences between GR4J, GR5J and GR6J. Structure after '
-                     'Perrin et al. (2003), Le Moine (2008) and Pushpalatha et al. (2011).',
-             width='stretch')
-
-    st.markdown("""
-**Three differences that are easy to misread.**
-
-- **Routing split.** GR4J and GR6J split effective rainfall 90/10 *before*
-  convolution and use two unit hydrographs, of base X4 and 2·X4. GR5J routes all
-  of Pr through a single hydrograph of base 2·X4 and splits *after*. GR5J is not
-  GR4J with a modified exchange term.
-- **Exchange applications.** F is applied twice in GR4J and GR5J, three times in
-  GR6J. The same X2 moves substantially more water in GR6J.
-- **Exponential store.** R2 is not bounded below at zero. That is what sustains a
-  slow recession indefinitely, and it is why GR6J cannot produce exactly zero flow.
-""")
-
-    UNITS = {'X1': 'mm', 'X2': 'mm/d', 'X3': 'mm', 'X4': 'd', 'X5': '-', 'X6': 'mm'}
-    TYPICAL = {'X1': '100 to 800', 'X2': '-5 to 3', 'X3': '20 to 500',
-               'X4': '1 to 10', 'X5': '-1 to 1', 'X6': '1 to 60'}
+    diagram_image, diagram_caption, diagram_notes = model_info.diagram
+    st.image(diagram_image, caption=diagram_caption, width='stretch')
+    st.markdown(diagram_notes)
 
     st.dataframe(
         pd.DataFrame([
             {'Parameter': name,
-             # PARAM_LABELS already carries the units, so strip them here
-             'Meaning': PARAM_LABELS[name].rsplit(' (', 1)[0],
-             'Units': UNITS[name],
-             'Full range': f'{PARAM_BOUNDS[name][0]:g} to {PARAM_BOUNDS[name][1]:g}',
-             'Typical': TYPICAL[name]}
-            for name in PARAM_NAMES[model]
+             # spec.label carries the units in parentheses, so strip them here
+             'Meaning': spec.label.rsplit(' (', 1)[0],
+             'Units': spec.units,
+             'Full range': f'{spec.bounds[0]:g} to {spec.bounds[1]:g}',
+             'Typical': spec.typical}
+            for name, spec in MODEL_PARAMS[model].items()
         ]),
         hide_index=True, use_container_width=True)
 
@@ -968,22 +966,39 @@ with st.expander('Model structures and what each parameter does'):
                'or a structure that cannot represent the catchment. Check before interpreting it.')
 
 
-if model == 'GR6J' and zero_fraction > 0.05:
-    st.warning(f'{100 * zero_fraction:.0f} per cent of observed days are zero flow. The GR6J '
+if not model_info.can_produce_zero_flow and zero_fraction > 0.05:
+    st.warning(f'{100 * zero_fraction:.0f} per cent of observed days are zero flow. The {model} '
                'exponential store asymptotes towards zero but never reaches it, so it will '
-               'produce a persistent low trickle where the river is actually dry. GR4J or GR5J '
-               'is likely the better structure for this catchment.')
+               'produce a persistent low trickle where the river is actually dry. A structure '
+               'that can reach zero flow (GR4J, GR5J or SIMHYD) is likely a better fit here.')
 
-if model in ('GR5J', 'GR6J'):
+if model_info.has_exchange_threshold:
     st.caption('The exchange term X2*(R/X3 - X5) is applied twice in GR5J and three times in '
                'GR6J, so large values of X2 combined with X5 can move a great deal of water into '
                'or out of the catchment. Check the calibrated water balance rather than trusting '
                'the efficiency score alone.')
 
+simhyd_overflow_to_gw = False
+if model == 'SIMHYD':
+    _overflow_label = st.selectbox(
+        'Soil-store overflow', list(SIMHYD_OVERFLOW_CHOICES), index=0,
+        help='When the soil moisture store fills past its capacity SMSC, the excess is '
+             'handled one of two ways. hydromad, the reference implementation, discards it. '
+             'Chiew et al. (2009) Figure 2 routes it into the groundwater store, so it '
+             'reappears later as baseflow. The two agree exactly whenever the soil store '
+             'never fills; they diverge on wet catchments with a small SMSC. Keep this the '
+             'same between calibration and analysis.')
+    simhyd_overflow_to_gw = SIMHYD_OVERFLOW_CHOICES[_overflow_label]
+    if simhyd_overflow_to_gw:
+        st.caption('Using the Chiew et al. (2009) overflow path. This departs from hydromad, '
+                   'so a numeric comparison against a hydromad run will not match on days the '
+                   'soil store overflows.')
+
 param_names = PARAM_NAMES[model]
 
 data_key = (uploaded_file.name, getattr(uploaded_file, 'size', len(df)), date_col, rain_col,
-            pet_col, flow_col, flow_units, float(area_km2), forcing_interpolated, model)
+            pet_col, flow_col, flow_units, float(area_km2), forcing_interpolated, model,
+            simhyd_overflow_to_gw)
 
 # %% 3. manual simulation
 section_break()
@@ -994,13 +1009,15 @@ st.write(f'Adjust the {model} parameters by hand and assess model behaviour befo
 
 manual_values = []
 for name in param_names:
-    lo, hi = PARAM_BOUNDS[name]
-    manual_values.append(st.number_input(f'{name} {PARAM_LABELS[name]}',
+    spec = MODEL_PARAMS[model][name]
+    lo, hi = spec.bounds
+    manual_values.append(st.number_input(f'{name} {spec.label}',
                                          min_value=float(lo), max_value=float(hi),
-                                         value=float(np.clip(PARAM_DEFAULTS[name], lo, hi)),
+                                         value=float(np.clip(spec.default, lo, hi)),
                                          key=f'manual_{model}_{name}'))
 
-q_sim_manual = run_model(rain, pet, model, tuple(manual_values))
+q_sim_manual = run_model(rain, pet, model, tuple(manual_values),
+                         simhyd_overflow_to_gw=simhyd_overflow_to_gw)
 
 section_break()
 st.subheader('Observed vs Simulated (mm/d) (exploration parameters)')
@@ -1075,17 +1092,15 @@ else:
                'write-up. Sweeping the weight from 0 to 1 and plotting the resulting flow '
                'duration curves traces the trade-off explicitly.')
 
-if model == 'GR6J' and criterion_type == 'Single transformation' and transform_kind == 'none':
-    st.warning('GR6J adds X6 specifically to control low flows, but an untransformed criterion is '
-               'almost entirely determined by peak flows, so X6 will be poorly constrained. '
-               'Consider the logarithmic or inverse transformation.')
+if (model_info.low_flow_criterion_note and criterion_type == 'Single transformation'
+        and transform_kind == 'none'):
+    st.warning(model_info.low_flow_criterion_note)
 
 warmup_days = int(st.number_input('Warm-up Days', value=730, min_value=0))
 
-if model == 'GR6J' and warmup_days < GR6J_MIN_WARMUP:
-    st.warning(f'The GR6J exponential store equilibrates slowly and is initialised at zero. With '
-               f'only {warmup_days} warm-up days the calibration may be fitting the spin-up rather '
-               f'than the catchment. At least {GR6J_MIN_WARMUP} days is safer.')
+if model_info.min_warmup_days and warmup_days < model_info.min_warmup_days:
+    st.warning(model_info.warmup_note.format(warmup_days=warmup_days,
+                                             min_days=model_info.min_warmup_days))
 
 # %% calibration / validation split
 st.markdown('**Validation hold-out**')
@@ -1220,9 +1235,9 @@ with st.expander('Advanced Calibration Settings'):
             if lo >= hi:
                 st.error(f'{name}: the lower bound must be below the upper bound.')
                 bounds_valid = False
-            elif name == 'X6' and lo <= 0:
-                st.error('X6: the lower bound must be greater than zero, since X6 divides the '
-                         'exponential store level.')
+            elif name in STRICTLY_POSITIVE_PARAMS and lo <= 0:
+                st.error(f'{name}: the lower bound must be greater than zero, since the model '
+                         f'divides by {name}.')
                 bounds_valid = False
 
         widened = [name for name in param_names
@@ -1276,6 +1291,7 @@ if st.button('Calibrate', type='primary', disabled=not (bounds_valid and holdout
                                refine_sample=refine_sample if refine else 0,
                                refine_scale=refine_scale,
                                fit_mask=fit_mask,
+                               simhyd_overflow_to_gw=simhyd_overflow_to_gw,
                                progress_callback=report_progress)
 
     cal_bar.empty()
@@ -1292,7 +1308,8 @@ if st.button('Calibrate', type='primary', disabled=not (bounds_valid and holdout
     ensemble = np.empty((len(behavioural_df), len(rain)))
 
     for i, (_, row) in enumerate(behavioural_df.iterrows()):
-        ensemble[i] = simulate(rain, pet, {p: row[p] for p in param_names}, model=model)
+        ensemble[i] = simulate(rain, pet, {p: row[p] for p in param_names}, model=model,
+                               simhyd_overflow_to_gw=simhyd_overflow_to_gw)
         ens_bar.progress((i + 1) / len(behavioural_df))
 
     ens_bar.empty()
@@ -1328,13 +1345,15 @@ if st.button('Calibrate', type='primary', disabled=not (bounds_valid and holdout
         'flow_units': flow_units,
         'area_km2': float(area_km2),
         'forcing_interpolated': forcing_interpolated,
+        'simhyd_overflow_to_gw': bool(simhyd_overflow_to_gw),
         'dates': dates,
         'q_obs': q_obs_mmd,
         'behavioural_df': behavioural_df,
         'n_behavioural': len(behavioural_df),
         'best_params': best_params,
         'best_score': cal_results['best_score'],
-        'q_cal': simulate(rain, pet, best_params, model=model),
+        'q_cal': simulate(rain, pet, best_params, model=model,
+                          simhyd_overflow_to_gw=simhyd_overflow_to_gw),
         'q05': np.nanpercentile(ensemble, 5, axis=0),
         'q50': np.nanpercentile(ensemble, 50, axis=0),
         'q95': np.nanpercentile(ensemble, 95, axis=0),
@@ -1631,8 +1650,8 @@ with st.expander('Advanced Parameter Diagnostics'):
     st.caption('The behavioural set is drawn from the differential evolution trajectory rather '
                'than a random sample of parameter space, so the spread reflects local sensitivity '
                'around the optimum rather than a formal predictive uncertainty. Adding parameters '
-               'widens the region of near-equivalent performance, so treat GR6J spreads with more '
-               'caution than GR4J ones.')
+               'widens the region of near-equivalent performance, so treat the spreads from the '
+               'more highly parameterised models (GR6J, SIMHYD) with more caution than GR4J ones.')
 
 # %% 5. gap filling
 section_break()
@@ -1776,7 +1795,8 @@ if show_analysis:
         help='Days at or below this are counted as cease-to-flow. Zero is the strict definition. '
              'A small positive value is often more useful, and is necessary for GR6J, whose '
              'exponential store cannot reach exactly zero, so modelled dry periods would otherwise '
-             'never register.')
+             'never register. GR4J, GR5J and SIMHYD can all produce exactly zero flow, so a zero '
+             'threshold is meaningful for them.')
 
     st.markdown('**Baseflow Separation (Lyne and Hollick)**')
 
@@ -1835,12 +1855,31 @@ if show_analysis:
     separation = run_baseflow(q_gapfilled, bf_alpha, bf_passes, bf_reflect)
     q_baseflow = separation['baseflow']
 
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric('Baseflow Index', f'{separation["bfi"]:.3f}')
-    col_b.metric('Alpha', f'{bf_alpha:.4f}')
-    col_c.metric('Passes', f'{bf_passes}')
+    # SIMHYD carries its own baseflow. When it is the calibrated model, compute
+    # the model's runoff split from the best parameter set and show it as a
+    # second, separate separation. It is a different quantity from the filter:
+    # the filter separates the gap filled hydrograph, this is the model's own
+    # accounting over a clean re-run.
+    simhyd_split = None
+    simhyd_bfi = np.nan
+    if MODEL_INFO[cal_model].provides_components:
+        best_values = tuple(cal['best_params'][p] for p in cal_params)
+        simhyd_split = run_simhyd_components(rain, pet, best_values,
+                                            overflow_to_gw=cal.get('simhyd_overflow_to_gw', False))
+        _mtot = float(np.nansum(simhyd_split['total']))
+        simhyd_bfi = (float(np.nansum(simhyd_split['baseflow'])) / _mtot
+                      if _mtot > 0 else np.nan)
 
-    st.subheader('Baseflow Separation')
+    metric_cols = st.columns(4 if simhyd_split is not None else 3)
+    metric_cols[0].metric('BFI (Lyne–Hollick)', f'{separation["bfi"]:.3f}')
+    metric_cols[1].metric('Alpha', f'{bf_alpha:.4f}')
+    metric_cols[2].metric('Passes', f'{bf_passes}')
+    if simhyd_split is not None:
+        metric_cols[3].metric('BFI (SIMHYD model)', f'{simhyd_bfi:.3f}')
+
+    st.subheader('Baseflow Separation — Lyne–Hollick digital filter')
+    st.caption('Applied to the gap filled series (observed flow, with the behavioural median '
+               'spliced into the gaps).')
     fig_bf, ax = new_fig(17, 8, [0.10, 0.15, 0.85, 0.75])
     ax.plot(cal_dates, q_gapfilled, color=C_OBS, linewidth=0.8, label='Total flow')
     ax.plot(cal_dates, q_baseflow, color=C_BASE, linewidth=1.2, label='Baseflow')
@@ -1851,14 +1890,36 @@ if show_analysis:
     ax.set_xlim(pd.Timestamp(cal_dates.min()), pd.Timestamp(cal_dates.max()))
     ax.set_yscale('log')
     ax.legend()
-    show(fig_bf, 'baseflow_separation')
+    show(fig_bf, 'baseflow_separation_lyne_hollick')
+
+    if simhyd_split is not None:
+        st.subheader('Baseflow Separation — SIMHYD model components')
+        st.caption('The runoff paths SIMHYD itself produces from the calibrated best parameter '
+                   'set, re-run over the whole record. This is the model\'s baseflow, not a '
+                   'filter of the observed hydrograph, so it will differ from the panel above.')
+        q_model_total = simhyd_split['total']
+        q_model_base = simhyd_split['baseflow']
+        q_model_inter = simhyd_split['interflow']
+        q_model_surface = simhyd_split['surface']
+        fig_sh, ax = new_fig(17, 8, [0.10, 0.15, 0.85, 0.75])
+        ax.stackplot(cal_dates, q_model_base, q_model_inter, q_model_surface,
+                     labels=['Baseflow', 'Interflow', 'Infiltration-excess'],
+                     colors=[C_BASE, '#6460AA', '#F37021'], alpha=0.85)
+        ax.plot(cal_dates, q_model_total, color=C_OBS, linewidth=0.6, label='Model total')
+        shade_periods(ax, cal_dates, cal.get('holdout_mask'))
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Flow (mm/d)')
+        ax.set_xlim(pd.Timestamp(cal_dates.min()), pd.Timestamp(cal_dates.max()))
+        ax.legend(loc='upper right', ncol=2)
+        show(fig_sh, 'baseflow_separation_simhyd_components')
 
     # %% products
     ctf_days = cease_to_flow(q_gapfilled, threshold=ctf_threshold)
 
     daily_frame = build_daily_frame(cal_dates, q_gapfilled, np.isnan(q_obs).astype(int),
                                     cal_area, start_month=wy_start_month,
-                                    baseflow_mmd=q_baseflow, ctf_flag=ctf_days)
+                                    baseflow_mmd=q_baseflow, ctf_flag=ctf_days,
+                                    model_components=simhyd_split)
 
     products = build_all_products(daily_frame, cal_area, start_month=wy_start_month)
 
@@ -1890,9 +1951,8 @@ if show_analysis:
         st.caption('Bars are shaded orange where more than 20 per cent of the water year was gap '
                    'filled, so a year carried largely by the model is visible rather than implied.')
 
-        if 'annual_baseflow' in products:
-            st.subheader('Annual Baseflow')
-            ab = products['annual_baseflow']
+        def _annual_baseflow_chart(ab, title, slug):
+            st.subheader(title)
             fig_ab, ax = new_fig(17, 7, [0.10, 0.16, 0.78, 0.74])
             ax.bar(ab['WaterYear'], ab['TotalFlow_GL'], color='#DDDDDD', edgecolor='black',
                    linewidth=0.4, label='Total flow')
@@ -1906,7 +1966,16 @@ if show_analysis:
                         linewidth=1)
             ax_bfi.set_ylabel('BFI (-)')
             ax_bfi.set_ylim(0, 1)
-            show(fig_ab, 'annual_baseflow')
+            show(fig_ab, slug)
+
+        if 'annual_baseflow' in products:
+            label = ('Annual Baseflow (Lyne–Hollick)' if 'annual_baseflow_simhyd' in products
+                     else 'Annual Baseflow')
+            _annual_baseflow_chart(products['annual_baseflow'], label, 'annual_baseflow')
+
+        if 'annual_baseflow_simhyd' in products:
+            _annual_baseflow_chart(products['annual_baseflow_simhyd'],
+                                   'Annual Baseflow (SIMHYD model)', 'annual_baseflow_simhyd')
 
         if 'annual_cease_to_flow' in products:
             ctf_table = products['annual_cease_to_flow']
@@ -1914,11 +1983,11 @@ if show_analysis:
             modelled_ctf = int(ctf_table['ModelledCeaseToFlowDays'].sum())
             st.write(f'Cease-to-flow days at or below {ctf_threshold:g} mm/d: {total_ctf} across the '
                      f'complete water years, of which {modelled_ctf} fall on gap filled days.')
-            if cal_model == 'GR6J' and ctf_threshold == 0.0:
-                st.warning('GR6J cannot produce exactly zero flow, so at a threshold of zero no gap '
-                           'filled day will ever be counted as cease-to-flow. Any dry period that '
-                           'was filled is being recorded as flowing. Set a small positive threshold, '
-                           'or read the observed and modelled columns separately.')
+            if not MODEL_INFO[cal_model].can_produce_zero_flow and ctf_threshold == 0.0:
+                st.warning(f'{cal_model} cannot produce exactly zero flow, so at a threshold of zero '
+                           'no gap filled day will ever be counted as cease-to-flow. Any dry period '
+                           'that was filled is being recorded as flowing. Set a small positive '
+                           'threshold, or read the observed and modelled columns separately.')
 
         with st.expander('Annual Summary Table'):
             st.dataframe(annual, hide_index=True)
@@ -2344,10 +2413,14 @@ else:
     holdout_readme_lines = ['', 'Validation hold-out: none (calibrated on all observed data)']
 
 readme_lines = [
-    'GR gap filling results package',
+    'HydroSTITCH results package',
     '',
     f'Generated: {datetime.now():%Y-%m-%d %H:%M}',
     f'Model: {cal_model}',
+    *([f'SIMHYD soil-store overflow: '
+       + ('Chiew et al. 2009 (recharges groundwater)' if cal.get('simhyd_overflow_to_gw')
+          else 'hydromad (discarded)')]
+      if cal_model == 'SIMHYD' else []),
     f'Calibration criterion: {cal["criterion"]}',
     f'Best criterion value: {cal["best_score"]:.4f}',
     f'Random seed: {cal["seed"]}',
@@ -2387,10 +2460,23 @@ if show_analysis:
         f'(labelled by the year it starts in)',
         f'Baseflow filter: Lyne and Hollick, alpha {bf_alpha:.4f}, {bf_passes} passes',
         f'Alpha source: {alpha_mode.lower()}',
-        f'Baseflow index over the record: {separation["bfi"]:.4f}',
+        f'Baseflow index over the record (Lyne-Hollick): {separation["bfi"]:.4f}',
         f'Cease-to-flow threshold: {ctf_threshold:g} mm/d',
         '',
     ]
+    if simhyd_split is not None:
+        readme_lines += [
+            'Two baseflow separations are provided because SIMHYD produces its own:',
+            '  * columns/files marked _LH are the Lyne and Hollick digital filter applied',
+            '    to the gap filled hydrograph;',
+            '  * columns/files marked _SIMHYD are the runoff paths SIMHYD itself generates',
+            '    from the calibrated parameter set, re-run over the whole record. Baseflow',
+            f'    index over the record (SIMHYD model): {simhyd_bfi:.4f}',
+            '  The two are different quantities and will not agree exactly.',
+            'Note: the daily baseflow columns were renamed in this version, e.g. Qbase_MLd',
+            'is now Qbase_LH_MLd.',
+            '',
+        ]
 
 readme_lines += [f'  csv/{name}.csv' for name in sorted(products)]
 readme_lines += [

@@ -12,7 +12,8 @@ import pandas as pd
 from scipy.optimize import differential_evolution
 from scipy.stats import qmc
 
-from core.models import simulate, PARAM_NAMES, PARAM_BOUNDS, PARAM_ROUNDING
+from core.models import (simulate, PARAM_NAMES, PARAM_BOUNDS, PARAM_ROUNDING,
+                         STRICTLY_POSITIVE_PARAMS)
 from core.metrics import score, composite_score, epsilon_from_obs, resolve_kge_bias
 
 # %% configuration
@@ -29,7 +30,8 @@ PENALTY = 1e9
 # %%
 def _objective_function(params, precip, pet, q_obs, warmup_days, metric,
                         transform_kind, composite_weight, epsilon, model, names,
-                        archive, kge_bias='auto', fit_mask=None):
+                        archive, kge_bias='auto', fit_mask=None,
+                        simhyd_overflow_to_gw=False):
     """Negative criterion, with every valid evaluation appended to archive.
 
     fit_mask, when given, is a boolean array the length of the record that is
@@ -40,7 +42,8 @@ def _objective_function(params, precip, pet, q_obs, warmup_days, metric,
     """
     param_dict = dict(zip(names, [float(p) for p in params]))
 
-    q_sim = simulate(precip, pet, param_dict, model=model)
+    q_sim = simulate(precip, pet, param_dict, model=model,
+                     simhyd_overflow_to_gw=simhyd_overflow_to_gw)
 
     mask = np.isfinite(q_obs) & np.isfinite(q_sim)
     if warmup_days > 0:
@@ -86,7 +89,7 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
                  transform_kind='none', composite_weight=None, maxiter=25, popsize=12,
                  behavioural_delta=0.05, seed=1, bounds=None, refine_sample=0,
                  refine_scale=0.15, kge_bias='auto', fit_mask=None,
-                 progress_callback=None):
+                 progress_callback=None, simhyd_overflow_to_gw=False):
     """Calibrate a GR model and return the best parameter set plus an archive.
 
     Parameters
@@ -168,9 +171,10 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
         if not (np.isfinite(lo) and np.isfinite(hi)) or lo >= hi:
             raise ValueError(f'Bounds for {name} must satisfy lower < upper, got {lo} to {hi}.')
 
-    if model == 'GR6J' and bounds['X6'][0] <= 0.0:
-        raise ValueError('The lower bound on X6 must be strictly positive, it divides the '
-                         'store level.')
+    for name in STRICTLY_POSITIVE_PARAMS:
+        if name in names and bounds[name][0] <= 0.0:
+            raise ValueError(f'The lower bound on {name} must be strictly positive, the '
+                             'model divides by it.')
 
     bounds_list = [bounds[name] for name in names]
 
@@ -205,7 +209,7 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
         bounds=bounds_list,
         args=(precip, pet, q_obs, warmup_days, metric, transform_kind,
               composite_weight, epsilon, model, names, archive, kge_bias,
-              fit_mask),
+              fit_mask, simhyd_overflow_to_gw),
         maxiter=maxiter,
         popsize=popsize,
         seed=seed,
@@ -278,7 +282,8 @@ def calibrate_gr(precip, pet, q_obs, model='GR4J', warmup_days=730, metric='KGE'
         for candidate in candidates:
             _objective_function(candidate, precip, pet, q_obs, warmup_days, metric,
                                 transform_kind, composite_weight, epsilon, model,
-                                names, archive, kge_bias, fit_mask)
+                                names, archive, kge_bias, fit_mask,
+                                simhyd_overflow_to_gw)
         sample_rows = archive[mark:]
 
         # the sample can find a better set than the polished optimum
