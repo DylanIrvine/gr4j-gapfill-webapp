@@ -763,7 +763,7 @@ with st.expander('**Selected References**'):
     ' model SIMHYD. Cooperative Research Centre for Catchment Hydrology, University of Melbourne.\n\n'
     'Other software packages:\n\n'
     'Andrews, F.T., Croke, B.W., Jakeman, A.J. (2011) An open software environment for hydrological '
-    'model assessment and development. Environmental Modelling & Software 26(10) 1171-1185.'
+    'model assessment and development. Environmental Modelling & Software 26(10) 1171-1185.\n\n'
     'Coron, L., Thirel, G., Delaigue, O., Perrin, C., and Andréassian, V. (2017). The suite of lumped '
     'GR hydrological models in an R package. Environmental Modelling and Software 94, 166-171.\n\n'
     )
