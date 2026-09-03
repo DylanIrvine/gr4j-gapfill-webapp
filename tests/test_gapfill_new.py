@@ -52,6 +52,9 @@ def test_ar1_fills_and_beats_median():
 
 
 def test_ar1_phi_one_is_snapped():
+    # equivalence holds on gaps short enough that the snapped taper stays
+    # inactive (everywhere within SNAP_TAPER_EDGE_DAYS of an edge): the 7- and
+    # 21-day gaps here, not the 60-day one.
     rain, pet, p_cal, q_obs, truth, deleted, q50 = _case()
     import core.gapfill as gf
     orig = gf._fit_ar1
@@ -60,8 +63,28 @@ def test_ar1_phi_one_is_snapped():
         got = gapfill_ar1(q_obs, q50)
     finally:
         gf._fit_ar1 = orig
-    np.testing.assert_allclose(got[deleted], gapfill_snapped(q_obs, q50)[deleted],
+    short = deleted.copy()
+    for gap in gf.identify_gaps(q_obs):
+        s, e = gap["start_idx"], gap["end_idx"]
+        if (e - s + 1) > 2 * gf.SNAP_TAPER_EDGE_DAYS:
+            short[s:e + 1] = False
+    assert short.sum() > 0
+    np.testing.assert_allclose(got[short], gapfill_snapped(q_obs, q50)[short],
                                atol=1e-6)
+
+
+def test_snapped_caps_and_tapers_long_gaps():
+    rain, pet, p_cal, q_obs, truth, deleted, q50 = _case()
+    q_obs = truth.copy()
+    s, L = 800, 130
+    q_obs[s:s + L] = np.nan
+    q_obs[s - 1] = truth[s - 1] + 50.0 * q50[s - 1]        # absurd pre-gap residual
+    filled = gapfill_snapped(q_obs, q50)
+
+    assert np.isfinite(filled).all()
+    mid = slice(s + L // 2 - 5, s + L // 2 + 5)
+    assert np.all(filled[mid] < 2.0 * q50[mid] + 1e-9)     # deep interior reverts to the median
+    assert np.all(filled[mid] > 0.4 * q50[mid])
 
 
 @pytest.mark.parametrize("model", ["GR4J", "SIMHYD"])

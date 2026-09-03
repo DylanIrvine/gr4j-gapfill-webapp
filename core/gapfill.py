@@ -87,6 +87,23 @@ GP_EPSILON_FRAC = 0.01       # log offset, as a fraction of the mean observed fl
 GP_MAX_LENGTH_SCALE = 45.0   # days; ceiling on the fitted RBF length scale
 GP_LOCAL_MEAN = True         # revert to the local-window mean residual, not the global one
 
+# The GP's dynamic (mean-removed) deviation is capped and tapered. Without the
+# cap a poor local model fit lets the posterior extrapolate a large multiplier
+# into the gap (seen as a +100% volume error on a badly biased background); the
+# taper returns the deep interior of a long gap to the median scaled by the
+# local mean residual mu, rather than a GP extrapolation far from any data.
+GP_DEV_CAP = float(np.log(3.0))   # ceiling on |dynamic log-residual|, i.e. x3 / /3
+GP_DEV_CAP_LINEAR = 3.0            # same idea for the non-default linear residual: multiple of |median|
+GP_TAPER_EDGE_DAYS = 21           # dynamic part at full strength within this many days of a gap edge
+GP_TAPER_SPAN_DAYS = 60           # then tapered linearly to zero over this many more days
+
+# %% endpoint-snapped residual configuration
+SNAP_RES_CAP_MULT = 3.0       # cap |endpoint residual| at this multiple of the local
+                              # median, so a model miss on a peak just outside the gap
+                              # cannot be ramped across the whole gap as a flat offset
+SNAP_TAPER_EDGE_DAYS = 14     # residual carried at full strength within this of an edge
+SNAP_TAPER_SPAN_DAYS = 42     # then tapered linearly to zero over this many more days
+
 # %% AR(1) residual configuration
 AR1_MIN_POINTS = 30           # residual pairs needed to estimate phi
 
@@ -101,8 +118,11 @@ ENKF_RAIN_AR = 0.4            # lag-1 correlation of the rainfall multiplier
 ENKF_PET_CV = 0.10            # coefficient of variation of the PET multiplier
 ENKF_OBS_ERR_FRAC = 0.12      # streamflow observation error, as a fraction of the flow
 ENKF_OBS_FLOOR_FRAC = 0.02    # plus a floor, as a fraction of the mean observed flow
-ENKF_WINDOW_DAYS = 180        # observations this many days either side of a gap inform it
-ENKF_MAX_OBS = 400            # cap on the observation vector per gap, for the solve
+ENKF_WINDOW_DAYS = 60         # observations this many days either side of a gap inform it
+                             # (180 fitted one linear gain across wet and dry season,
+                             # a poor local model; 60 keeps the gain local)
+ENKF_MAX_OBS = 120           # cap on the observation vector per gap, for the solve
+ENKF_BG_SCALE_CLIP = (1.0 / 3.0, 3.0)   # bound on the per-gap background rescale
 
 
 # %% shared helpers
@@ -170,23 +190,60 @@ def gapfill_p50(q_obs, q50):
 
 
 # %% method 2: endpoint snapped residuals
-def gapfill_snapped(q_obs, q50):
+def gapfill_snapped(q_obs, q50, *, res_cap_mult=SNAP_RES_CAP_MULT,
+                    taper_edge_days=SNAP_TAPER_EDGE_DAYS,
+                    taper_span_days=SNAP_TAPER_SPAN_DAYS):
     """Linearly interpolate the residual across each gap and add it to the median.
 
-    This removes the step at the gap edges. Beyond the first and last
-    observation the residual is held constant, since there is nothing to
-    interpolate between.
+    The residual observed - median is blended linearly between the last
+    observation before the gap and the first one after it, then added to the
+    modelled median, so the fill inherits the model's shape with no step at the
+    edges. Two safeguards stop a long gap or a nearby model miss producing a
+    runaway near-constant fill: the endpoint residual is capped at res_cap_mult
+    times the local median, and its contribution is tapered to zero from
+    taper_edge_days to taper_edge_days + taper_span_days into the gap, so the
+    deep interior of a long gap reverts to the modelled median.
     """
     q_obs = _as_float(q_obs)
     q50 = _as_float(q50)
     gapfilled = q_obs.copy()
 
-    residual_interp = (pd.Series(q_obs - q50)
-                       .interpolate(method='linear', limit_direction='both')
-                       .to_numpy())
-
     missing = ~np.isfinite(q_obs)
-    gapfilled[missing] = q50[missing] + residual_interp[missing]
+    if not missing.any():
+        return gapfilled
+
+    residuals = q_obs - q50
+    finite = np.isfinite(residuals)
+    n = len(q_obs)
+    mean_scale = float(np.nanmean(np.abs(q50))) if np.isfinite(np.nanmean(q50)) else 0.0
+    small = max(1e-9, 1e-3 * mean_scale)
+
+    for gap in identify_gaps(q_obs):
+        s, e = gap['start_idx'], gap['end_idx']
+        L = e - s + 1
+        idx = np.arange(s, e + 1)
+
+        left = residuals[s - 1] if s > 0 and finite[s - 1] else None
+        right = residuals[e + 1] if e < n - 1 and finite[e + 1] else None
+        if left is None and right is None:
+            continue                                  # unanchored; left to the tail fallback
+        if left is None:
+            left = right
+        if right is None:
+            right = left
+
+        cap = res_cap_mult * np.maximum(np.abs(q50[idx]), small)
+        w = np.arange(1, L + 1) / (L + 1)             # 0..1 across the gap
+        r_gap = (1.0 - w) * np.clip(left, -cap, cap) + w * np.clip(right, -cap, cap)
+
+        dist = np.minimum(np.arange(1, L + 1), np.arange(L, 0, -1))
+        taper = np.clip(1.0 - (dist - taper_edge_days) / max(taper_span_days, 1.0),
+                        0.0, 1.0)
+        gapfilled[s:e + 1] = q50[s:e + 1] + r_gap * taper
+
+    unfilled = ~np.isfinite(gapfilled)
+    if unfilled.any():
+        gapfilled[unfilled] = q50[unfilled]
     return gapfilled
 
 
@@ -323,11 +380,24 @@ def gapfill_gaussian_process(q_obs, q50, seed=0, *, log_residual=GP_LOG_RESIDUAL
         gp = GaussianProcessRegressor(kernel=kernel, optimizer=None, normalize_y=False)
         gp.fit(train.reshape(-1, 1).astype(float), (residual[train] - mu) / sd)
 
-        pred_residual = gp.predict(target.reshape(-1, 1).astype(float)) * sd + mu
+        gp_dev = gp.predict(target.reshape(-1, 1).astype(float)) * sd
+
+        # taper deep inside a long gap towards the record-wide reversion level
+        # (global_mu): near the edges the fill is the local mean residual mu plus
+        # the GP deviation; far from any observation it is just the median scaled
+        # by global_mu, rather than a local bias or a GP extrapolation
+        dist = np.minimum(target - (start - 1), (end + 1) - target)
+        taper = np.clip(1.0 - (dist - GP_TAPER_EDGE_DAYS) / max(GP_TAPER_SPAN_DAYS, 1.0),
+                        0.0, 1.0)
 
         if log_residual:
+            gp_dev = np.clip(gp_dev, -GP_DEV_CAP, GP_DEV_CAP)
+            pred_residual = global_mu + taper * ((mu - global_mu) + gp_dev)
             gapfilled[target] = np.exp(log_q50[target] + pred_residual) - eps
         else:
+            lim = GP_DEV_CAP_LINEAR * np.maximum(np.abs(q50[target]), 1e-9)
+            gp_dev = np.clip(gp_dev, -lim, lim)
+            pred_residual = global_mu + taper * ((mu - global_mu) + gp_dev)
             gapfilled[target] = q50[target] + pred_residual
 
         del gp
@@ -379,8 +449,9 @@ def gapfill_ar1(q_obs, q50):
     gap, so the fill is anchored at both edges and decays towards the mean
     residual in the interior of a long gap. phi is the lag-1 autocorrelation of
     the observed residual series, so the decay rate is set by the data rather
-    than assumed. With phi close to 1 this reduces to the snapped method; with
-    phi small it reduces to the behavioural median.
+    than assumed. With phi close to 1 this matches the snapped method on short
+    gaps (the snapped method additionally caps and tapers the residual on long
+    ones); with phi small it reduces to the behavioural median.
 
     An unanchored gap at the start or end of the record uses the single
     available anchor. Too few residuals to estimate phi falls back to snapped.
@@ -471,13 +542,16 @@ def gapfill_enkf(q_obs, precip, pet, params, model='GR4J', *,
     observed flows in a window straddling it, using the ensemble cross-covariance
     between the gap-day flows and the windowed observations:
 
-        q_gap  <-  q_gap_det  +  Cov(q_gap, q_win) [Cov(q_win) + R]^-1 (y_win - q_win_det)
+        q_gap  <-  b_gap  +  Cov(q_gap, q_win) [Cov(q_win) + R]^-1 (y_win - b_win)
 
-    The background (q_*_det) is the single deterministic run on the unperturbed
-    forcing, not the ensemble mean: routing rainfall through a concave response
-    makes the ensemble mean sit below the deterministic run (Jensen's
-    inequality), which would push every fill low. The ensemble is used only for
-    the anomalies that form the covariances.
+    The background b is the single deterministic run on the unperturbed forcing
+    (not the ensemble mean: routing rainfall through a concave response makes the
+    ensemble mean sit below the deterministic run by Jensen's inequality, which
+    would push every fill low), rescaled per gap by a scalar so its mean over the
+    straddling window matches the observed mean there. That removes whatever
+    volume bias the operational calibration carries before the covariance term
+    refines the shape. The ensemble is used only for the anomalies that form the
+    covariances.
 
     R is a heteroscedastic observation-error variance, a fraction of the flow
     plus a floor. The correction on a gap day scales with its ensemble
@@ -553,18 +627,27 @@ def gapfill_enkf(q_obs, precip, pet, params, model='GR4J', *,
             centre = 0.5 * (s + e)
             widx = np.sort(widx[np.argsort(np.abs(widx - centre))[:max_obs]])
 
-        ha = anomaly[:, widx]                             # n_ensemble x n_obs
-        ga = anomaly[:, gidx]                             # n_ensemble x n_gap
+        # per-gap multiplicative de-bias of the background: the deterministic run
+        # carries whatever volume bias the operational calibration has, so
+        # rescale it to match the observed mean over the straddling window before
+        # the ensemble covariance refines the shape.
+        bg_bar = float(np.mean(background[widx]))
+        scale = (float(np.mean(q_obs[widx])) / bg_bar) if bg_bar > 1e-9 else 1.0
+        scale = float(np.clip(scale, *ENKF_BG_SCALE_CLIP))
+        bg_gap, bg_win = scale * background[gidx], scale * background[widx]
+
+        ha = scale * anomaly[:, widx]                     # n_ensemble x n_obs
+        ga = scale * anomaly[:, gidx]                     # n_ensemble x n_gap
 
         pyy = ha.T @ ha / denom
         r_diag = (obs_err_frac * np.maximum(q_obs[widx], 0.0)) ** 2 + floor_var
         pyy[np.diag_indices_from(pyy)] += r_diag
 
-        innovation = q_obs[widx] - background[widx]
+        innovation = q_obs[widx] - bg_win
         gain_rhs = np.linalg.solve(pyy, innovation)       # n_obs
         update = (ga.T @ ha / denom) @ gain_rhs           # n_gap
 
-        gapfilled[gidx] = background[gidx] + update
+        gapfilled[gidx] = bg_gap + update
         spread[gidx] = ensemble[:, gidx].std(axis=0)
 
     unfilled = ~np.isfinite(gapfilled)
