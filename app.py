@@ -7,6 +7,7 @@
 import gc
 import inspect
 import math
+import os
 import zipfile
 from datetime import datetime
 from io import BytesIO
@@ -43,6 +44,7 @@ from core.rainfall import (annual_rainfall, spi, cumulative_by_water_year,
                            annual_anomaly_series)
 from core.plots import (cumulative_spaghetti, anomaly_bars, rainfall_runoff_cumulative)
 from core.baseflow import recession_analysis
+from core.usage import increment as _record_run
 
 # %% interface styling
 # Streamlit's primary button is red in the default theme, and the workflow is a
@@ -769,6 +771,43 @@ with head_text:
 
 with head_logo:
     st.image('docs/HS_Logo.png', width='stretch')
+
+
+# %% run counter
+# Count once per browser session (Streamlit reruns the whole script on every
+# widget change). A file backs the count; if that filesystem is read-only, an
+# in-memory tally per running container is used instead. See core/usage.py for
+# the persistence caveat on Streamlit Community Cloud.
+def _run_count_setting(key, env, default=0):
+    try:
+        if key in st.secrets:
+            return int(st.secrets[key])
+    except Exception:
+        pass
+    try:
+        return int(os.environ.get(env, default))
+    except (TypeError, ValueError):
+        return default
+
+
+@st.cache_resource
+def _in_memory_run_count():
+    return {'n': 0}
+
+
+if 'run_counted' not in st.session_state:
+    _rc_path = _run_count_setting('run_count_path', 'HYDROSTITCH_RUN_COUNT_PATH', None) or None
+    _rc_start = _run_count_setting('run_count_start', 'HYDROSTITCH_RUN_COUNT_START', 0)
+    _n = _record_run(path=_rc_path, start=_rc_start)
+    if _n is None:                       # read-only filesystem: fall back to this container
+        _mem = _in_memory_run_count()
+        _mem['n'] += 1
+        _n = _mem['n']
+    st.session_state['run_count'] = _n
+    st.session_state['run_counted'] = True
+
+if st.session_state.get('run_count'):
+    st.caption(f"Sessions run: {st.session_state['run_count']:,}")
 
 st.write(
     'HydroSTITCH runs several lumped parameter conceptual rainfall-runoff models, calibrating the '
