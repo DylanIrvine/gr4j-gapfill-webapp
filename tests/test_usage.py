@@ -35,3 +35,34 @@ def test_unwritable_path_returns_none(tmp_path):
     blocker = tmp_path / "blocker"
     blocker.write_text("x")
     assert increment(blocker / "nested" / "count.json") is None
+
+
+def test_redis_backend_is_used_when_configured(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_incr(url, token, key, start=0):
+        seen["args"] = (url, token, key, start)
+        return 42
+
+    monkeypatch.setattr("core.usage._redis_incr", fake_incr)
+    p = tmp_path / "count.json"
+    n = increment(p, redis_url="https://x.upstash.io", redis_token="tok",
+                  redis_key="hydrostitch:runs")
+    assert n == 42
+    assert seen["args"] == ("https://x.upstash.io", "tok", "hydrostitch:runs", 0)
+    assert not p.exists()          # file backend untouched when Redis succeeds
+
+
+def test_redis_failure_falls_back_to_file(tmp_path, monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr("core.usage._redis_incr", boom)
+    p = tmp_path / "count.json"
+    assert increment(p, redis_url="https://x", redis_token="t") == 1
+    assert p.exists()
+
+
+def test_no_redis_creds_uses_file(tmp_path):
+    p = tmp_path / "count.json"
+    assert increment(p, redis_url=None, redis_token=None) == 1

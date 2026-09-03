@@ -1,14 +1,25 @@
 # core/usage.py
-# A best-effort "times run" counter for the app: how many browser sessions have
-# started HydroSTITCH.
+# A "times run" counter for the app: how many browser sessions have started
+# HydroSTITCH.
 #
-# Persistence on Streamlit Community Cloud is limited. The container filesystem is
-# wiped on every redeploy or reboot, so a file-backed count resumes from whatever
-# value last survived rather than a true lifetime total. It is exact for a local
-# run, or for a deployment with a persistent volume. Point the environment
-# variable HYDROSTITCH_RUN_COUNT_PATH (or st.secrets['run_count_path']) at a
-# persistent location to keep it exact, and set HYDROSTITCH_RUN_COUNT_START (or
-# st.secrets['run_count_start']) to carry over a count from elsewhere.
+# Two backends, in order of preference:
+#
+#   1. Upstash Redis (serverless). An atomic INCR on a single key. Survives
+#      redeploys and reboots, and is race-safe across concurrent users. Enabled
+#      by passing redis_url + redis_token (from st.secrets or the
+#      UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN environment variables).
+#      One database holds any number of counters - use a distinct redis_key per
+#      app (default "hydrostitch:runs").
+#
+#   2. A local JSON file (.run_count.json). Zero configuration, but the container
+#      filesystem on Streamlit Community Cloud is wiped on every redeploy or
+#      reboot, so the count resumes from the last surviving value rather than a
+#      true lifetime total. Exact for a local run or a persistent volume; point
+#      HYDROSTITCH_RUN_COUNT_PATH at a persistent location to keep it exact.
+#
+# increment() returns None only when neither backend is available (e.g. no Redis
+# configured and a read-only filesystem), so the caller can fall back to an
+# in-process tally or skip the display.
 
 from __future__ import annotations
 
@@ -19,8 +30,32 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _DEFAULT_PATH = Path(__file__).resolve().parent.parent / ".run_count.json"
+DEFAULT_REDIS_KEY = "hydrostitch:runs"
 
 
+# --------------------------------------------------------------------------- #
+# Redis backend
+# --------------------------------------------------------------------------- #
+def _redis_incr(url, token, key, start=0):
+    """Atomic INCR on an Upstash Redis key; seeds it to `start` first if unset."""
+    from upstash_redis import Redis
+
+    client = Redis(url=url, token=token)
+    if start:
+        client.set(key, int(start), nx=True)
+    return int(client.incr(key))
+
+
+def _redis_get(url, token, key):
+    from upstash_redis import Redis
+
+    value = Redis(url=url, token=token).get(key)
+    return int(value) if value is not None else 0
+
+
+# --------------------------------------------------------------------------- #
+# File backend
+# --------------------------------------------------------------------------- #
 def _resolve_path(explicit=None):
     if explicit:
         return Path(explicit)
@@ -51,13 +86,23 @@ def _write_atomic(path, data):
             pass
 
 
-def increment(path=None, start=0):
-    """Increment the persisted run count and return the new total.
+# --------------------------------------------------------------------------- #
+# public API
+# --------------------------------------------------------------------------- #
+def increment(path=None, start=0, *, redis_url=None, redis_token=None,
+              redis_key=DEFAULT_REDIS_KEY):
+    """Increment the run count and return the new total (or None if unavailable).
 
-    Returns None if the count cannot be read or written (for example a read-only
-    filesystem), so the caller can simply skip the display or fall back to an
-    in-process tally.
+    Redis is the source of truth when redis_url and redis_token are supplied; any
+    Redis error falls through to the JSON file backend so the counter still moves.
     """
+    if redis_url and redis_token:
+        try:
+            return _redis_incr(redis_url, redis_token, redis_key or DEFAULT_REDIS_KEY,
+                               start)
+        except Exception:
+            pass  # network / auth / missing package -> file backend
+
     target = _resolve_path(path)
     try:
         current, data = _read(target)
@@ -73,7 +118,13 @@ def increment(path=None, start=0):
         return None
 
 
-def read_only(path=None):
+def read_only(path=None, *, redis_url=None, redis_token=None,
+              redis_key=DEFAULT_REDIS_KEY):
     """The current count without incrementing it, or 0 if unavailable."""
+    if redis_url and redis_token:
+        try:
+            return _redis_get(redis_url, redis_token, redis_key or DEFAULT_REDIS_KEY)
+        except Exception:
+            pass
     current, _ = _read(_resolve_path(path))
     return current

@@ -775,9 +775,25 @@ with head_logo:
 
 # %% run counter
 # Count once per browser session (Streamlit reruns the whole script on every
-# widget change). A file backs the count; if that filesystem is read-only, an
-# in-memory tally per running container is used instead. See core/usage.py for
-# the persistence caveat on Streamlit Community Cloud.
+# widget change). Preferred backend is Upstash Redis (an atomic INCR that
+# survives redeploys); it needs, in st.secrets under [redis] or as environment
+# variables:
+#     rest_url  / UPSTASH_REDIS_REST_URL
+#     rest_token / UPSTASH_REDIS_REST_TOKEN
+#     key       / HYDROSTITCH_RUN_COUNT_KEY   (optional, default "hydrostitch:runs")
+# One Upstash database can hold many counters - just give each app its own key.
+# Without Redis it falls back to a JSON file, then to an in-memory tally per
+# running container. See core/usage.py.
+def _run_count_secret(name, env):
+    try:
+        section = st.secrets['redis'] if 'redis' in st.secrets else {}
+        if name in section:
+            return str(section[name])
+    except Exception:
+        pass
+    return os.environ.get(env)
+
+
 def _run_count_setting(key, env, default=0):
     try:
         if key in st.secrets:
@@ -798,8 +814,12 @@ def _in_memory_run_count():
 if 'run_counted' not in st.session_state:
     _rc_path = _run_count_setting('run_count_path', 'HYDROSTITCH_RUN_COUNT_PATH', None) or None
     _rc_start = _run_count_setting('run_count_start', 'HYDROSTITCH_RUN_COUNT_START', 0)
-    _n = _record_run(path=_rc_path, start=_rc_start)
-    if _n is None:                       # read-only filesystem: fall back to this container
+    _rc_url = _run_count_secret('rest_url', 'UPSTASH_REDIS_REST_URL')
+    _rc_token = _run_count_secret('rest_token', 'UPSTASH_REDIS_REST_TOKEN')
+    _rc_key = _run_count_secret('key', 'HYDROSTITCH_RUN_COUNT_KEY') or 'hydrostitch:runs'
+    _n = _record_run(path=_rc_path, start=_rc_start, redis_url=_rc_url,
+                     redis_token=_rc_token, redis_key=_rc_key)
+    if _n is None:                       # no backend available: this container only
         _mem = _in_memory_run_count()
         _mem['n'] += 1
         _n = _mem['n']
