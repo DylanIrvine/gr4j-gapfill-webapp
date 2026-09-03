@@ -7,4 +7,9 @@ reportlab
 openpyxl
 scikit-learn
 xlsxwriter
-numba
+
+# numba is deliberately NOT listed here. It pins a supported numpy range, and on
+# a hosted deploy (Streamlit Cloud) pip then drags numpy backwards to satisfy it,
+# which breaks the scikit-learn / scipy wheels and the app fails to import. See
+# the note in core/models.py. The models fall back to pure Python without it
+# (identical results, slower); install numba in a local environment for speed.
