@@ -207,7 +207,12 @@ def _fit_hyperparameters(x, y, seed=0, max_length_scale=GP_MAX_LENGTH_SCALE):
     pre-gap residual dominate the fill right across a long gap.
     """
     ls0 = min(15.0, 0.5 * max_length_scale)
-    kernel = (1.0 * RBF(length_scale=ls0, length_scale_bounds=(2.0, max_length_scale))
+    # the lower bound is deliberately sub-daily: on a daily residual with the
+    # local mean removed there is often no autocorrelation left, and the
+    # optimiser then wants a length scale below one day. Letting it get there
+    # avoids a stream of "close to the lower bound" convergence warnings and, in
+    # that regime, the GP simply reverts to the local mean, which is intended.
+    kernel = (1.0 * RBF(length_scale=ls0, length_scale_bounds=(0.3, max_length_scale))
               + WhiteKernel(noise_level=0.1, noise_level_bounds=(1e-4, 1e2)))
 
     gp = GaussianProcessRegressor(kernel=kernel, normalize_y=False,
