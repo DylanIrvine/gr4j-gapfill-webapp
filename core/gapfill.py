@@ -92,7 +92,11 @@ AR1_MIN_POINTS = 30           # residual pairs needed to estimate phi
 
 # %% ensemble Kalman smoother configuration
 ENKF_N_ENSEMBLE = 60          # model runs; runtime is linear in this
-ENKF_RAIN_CV = 0.25           # coefficient of variation of the rainfall multiplier
+ENKF_RAIN_CV = 0.15           # coefficient of variation of the rainfall multiplier
+                             # (0.25 was large enough that the concave rainfall-
+                             # runoff response biased the ensemble mean low; the
+                             # deterministic background below removes the bias and
+                             # a tighter spread keeps the covariance well posed)
 ENKF_RAIN_AR = 0.4            # lag-1 correlation of the rainfall multiplier
 ENKF_PET_CV = 0.10            # coefficient of variation of the PET multiplier
 ENKF_OBS_ERR_FRAC = 0.12      # streamflow observation error, as a fraction of the flow
@@ -467,7 +471,13 @@ def gapfill_enkf(q_obs, precip, pet, params, model='GR4J', *,
     observed flows in a window straddling it, using the ensemble cross-covariance
     between the gap-day flows and the windowed observations:
 
-        q_gap  <-  q_gap_mean  +  Cov(q_gap, q_win) [Cov(q_win) + R]^-1 (y_win - q_win_mean)
+        q_gap  <-  q_gap_det  +  Cov(q_gap, q_win) [Cov(q_win) + R]^-1 (y_win - q_win_det)
+
+    The background (q_*_det) is the single deterministic run on the unperturbed
+    forcing, not the ensemble mean: routing rainfall through a concave response
+    makes the ensemble mean sit below the deterministic run (Jensen's
+    inequality), which would push every fill low. The ensemble is used only for
+    the anomalies that form the covariances.
 
     R is a heteroscedastic observation-error variance, a fraction of the flow
     plus a floor. The correction on a gap day scales with its ensemble
@@ -518,8 +528,10 @@ def gapfill_enkf(q_obs, precip, pet, params, model='GR4J', *,
         ensemble[m] = simulate(rain_ens[m], pet_ens[m], params, model=model,
                                simhyd_overflow_to_gw=simhyd_overflow_to_gw)
 
-    mean = ensemble.mean(axis=0)
-    anomaly = ensemble - mean                             # n_ensemble x n
+    # deterministic run on the unperturbed forcing: the analysis background.
+    background = simulate(precip, pet, params, model=model,
+                          simhyd_overflow_to_gw=simhyd_overflow_to_gw)
+    anomaly = ensemble - ensemble.mean(axis=0)            # n_ensemble x n, spread only
     denom = n_ensemble - 1
 
     mean_flow = float(np.mean(q_obs[observed]))
@@ -535,7 +547,7 @@ def gapfill_enkf(q_obs, precip, pet, params, model='GR4J', *,
         lo, hi = s - window_days, e + window_days
         widx = observed[(observed >= lo) & (observed <= hi)]
         if widx.size == 0:
-            gapfilled[gidx] = mean[gidx]
+            gapfilled[gidx] = background[gidx]
             continue
         if widx.size > max_obs:
             centre = 0.5 * (s + e)
@@ -548,14 +560,14 @@ def gapfill_enkf(q_obs, precip, pet, params, model='GR4J', *,
         r_diag = (obs_err_frac * np.maximum(q_obs[widx], 0.0)) ** 2 + floor_var
         pyy[np.diag_indices_from(pyy)] += r_diag
 
-        innovation = q_obs[widx] - mean[widx]
+        innovation = q_obs[widx] - background[widx]
         gain_rhs = np.linalg.solve(pyy, innovation)       # n_obs
         update = (ga.T @ ha / denom) @ gain_rhs           # n_gap
 
-        gapfilled[gidx] = mean[gidx] + update
+        gapfilled[gidx] = background[gidx] + update
         spread[gidx] = ensemble[:, gidx].std(axis=0)
 
     unfilled = ~np.isfinite(gapfilled)
-    gapfilled[unfilled] = mean[unfilled]
+    gapfilled[unfilled] = background[unfilled]
 
     return (gapfilled, spread) if return_spread else gapfilled

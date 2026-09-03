@@ -1682,10 +1682,11 @@ st.subheader('6. Gap Filling')
 
 gap_method = st.selectbox('Gap Filling Method', GAP_METHODS)
 if gap_method == 'Ensemble Kalman Smoother':
-    st.caption('Re-runs the calibrated model as a 60-member ensemble with perturbed '
-               'rainfall and PET, then updates each gap with the observations either '
-               'side of it through the ensemble covariance. Slower than the residual '
-               'methods, and it is the only one that uses the forcing through the gap.')
+    st.caption('Takes the deterministic calibrated run as the background, then '
+               'updates each gap with the observations either side of it through '
+               'the covariance of a 60-member ensemble with perturbed rainfall '
+               'and PET. Slower than the residual methods, and it is the only one '
+               'that uses the forcing through the gap.')
 
 q_gapfilled = run_gapfill(q_obs, q50, gap_method, rain=rain, pet=pet,
                           best_params=cal['best_params'], model=cal_model,
