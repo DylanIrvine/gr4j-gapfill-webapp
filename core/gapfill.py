@@ -8,7 +8,9 @@
 #
 #   gapfill_p50               insert the behavioural median
 #   gapfill_snapped           linear interpolation of the residual across the gap
-#   gapfill_gaussian_process  a Gaussian process posterior over the residual
+#   gapfill_gaussian_process  a Gaussian process posterior over the log-ratio
+#                             residual, with a capped length scale and a local
+#                             reversion level
 #   gapfill_ar1               an AR(1) process on the residual, run from both
 #                             anchors towards the gap interior and blended
 #
@@ -51,9 +53,39 @@ HYPER_MAX_POINTS = 1000       # cap on training points for the hyperparameter fi
 HYPER_BLOCK_DAYS = 250        # length of each contiguous block in that sample
 WINDOW_LENGTH_SCALES = 4.0    # window half-width, in fitted length scales
 WINDOW_MIN_DAYS = 120         # floor on window half-width
-WINDOW_MAX_DAYS = 1500        # ceiling on window half-width
+WINDOW_MAX_DAYS = 360         # ceiling on window half-width
 WINDOW_MAX_POINTS = 1500      # cap on training points per local solve
 MIN_TRAIN_POINTS = 10         # below this, fall back to the snapped method
+
+# The GP models the residual between the observed flow and the behavioural
+# median. Three choices keep it well behaved on a flashy, high-dynamic-range
+# river; without them it produces a flat plateau across a long dry-season gap
+# because a large pre-gap residual is carried the whole way on a long length
+# scale, and the far field reverts to a record-wide mean dominated by wet-season
+# model bias:
+#
+#   GP_LOG_RESIDUAL      model log(q_obs + eps) - log(q50 + eps), not the raw
+#                        difference. The raw residual near a 1000 m3/s peak is
+#                        hundreds; near 3 m3/s baseflow it is order one. A single
+#                        standardisation cannot serve both. In log space the
+#                        residual is close to homoscedastic and the far-field
+#                        reversion is multiplicative: q50 scaled by a constant
+#                        fraction, which on a recession is a scaled recession
+#                        rather than a horizontal line.
+#   GP_MAX_LENGTH_SCALE  cap the fitted RBF length scale (days). A residual that
+#                        the optimiser lets run to hundreds of days carries an
+#                        anchor value across an entire gap. Capped, the posterior
+#                        reverts to the local level within a few weeks of the
+#                        last observation.
+#   GP_LOCAL_MEAN        revert to the mean residual in the local window around
+#                        each gap, not the global mean. The global mean is set by
+#                        wet-season model bias and is the wrong target in the
+#                        middle of a dry recession.
+
+GP_LOG_RESIDUAL = True        # model the log-ratio residual rather than the difference
+GP_EPSILON_FRAC = 0.01       # log offset, as a fraction of the mean observed flow
+GP_MAX_LENGTH_SCALE = 45.0   # days; ceiling on the fitted RBF length scale
+GP_LOCAL_MEAN = True         # revert to the local-window mean residual, not the global one
 
 # %% AR(1) residual configuration
 AR1_MIN_POINTS = 30           # residual pairs needed to estimate phi
@@ -167,9 +199,15 @@ def _hyperparameter_sample(obs_idx, n_max=HYPER_MAX_POINTS, block=HYPER_BLOCK_DA
     return np.unique(sample)[:n_max]
 
 
-def _fit_hyperparameters(x, y, seed=0):
-    """Fit RBF amplitude, length scale and noise on a bounded training sample."""
-    kernel = (1.0 * RBF(length_scale=30.0, length_scale_bounds=(2.0, 2000.0))
+def _fit_hyperparameters(x, y, seed=0, max_length_scale=GP_MAX_LENGTH_SCALE):
+    """Fit RBF amplitude, length scale and noise on a bounded training sample.
+
+    The length scale is capped: on a multi-decade daily record the optimiser
+    will otherwise settle on a value of hundreds of days, which lets a single
+    pre-gap residual dominate the fill right across a long gap.
+    """
+    ls0 = min(15.0, 0.5 * max_length_scale)
+    kernel = (1.0 * RBF(length_scale=ls0, length_scale_bounds=(2.0, max_length_scale))
               + WhiteKernel(noise_level=0.1, noise_level_bounds=(1e-4, 1e2)))
 
     gp = GaussianProcessRegressor(kernel=kernel, normalize_y=False,
@@ -197,18 +235,23 @@ def _cluster_gaps(gaps, window):
     return clusters
 
 
-def gapfill_gaussian_process(q_obs, q50, seed=0):
+def gapfill_gaussian_process(q_obs, q50, seed=0, *, log_residual=GP_LOG_RESIDUAL,
+                             epsilon_frac=GP_EPSILON_FRAC,
+                             max_length_scale=GP_MAX_LENGTH_SCALE,
+                             local_mean=GP_LOCAL_MEAN):
     """Fill gaps with a Gaussian process posterior over the residual series.
 
-    Hyperparameters are fitted once on a bounded sample, then each gap (or
-    cluster of nearby gaps) is solved exactly against the observations inside a
-    local window. Runtime scales with the number of gaps rather than the length
-    of the record, and peak memory is set by WINDOW_MAX_POINTS rather than by
-    the record length.
+    The residual is the log-ratio log(q_obs + eps) - log(q50 + eps) by default
+    (log_residual), which keeps the noise roughly constant across three orders
+    of magnitude of flow and makes the far-field reversion a scaled version of
+    the model hydrograph rather than a flat line. The RBF length scale is capped
+    at max_length_scale days, and each gap reverts to the mean residual of the
+    observations in its local window (local_mean) rather than to a record-wide
+    mean set by wet-season model bias.
 
-    Far from any observation the posterior reverts to the mean residual, so
-    unanchored gaps at the start or end of a record degrade gracefully towards
-    the behavioural median rather than extrapolating a trend.
+    Hyperparameters are fitted once on a bounded sample; each gap is then solved
+    exactly against the observations in a local window, so runtime scales with
+    the number of gaps rather than the record length.
     """
     q_obs = _as_float(q_obs)
     q50 = _as_float(q50)
@@ -218,25 +261,31 @@ def gapfill_gaussian_process(q_obs, q50, seed=0):
     if not missing.any():
         return gapfilled
 
-    residuals = q_obs - q50
-    observed = np.isfinite(residuals)
-
+    observed = np.isfinite(q_obs)
     if observed.sum() < MIN_TRAIN_POINTS:
         return gapfill_snapped(q_obs, q50)
 
-    # standardise once, globally, so the fitted hyperparameters mean the same
-    # thing in every local window
-    mu = float(np.mean(residuals[observed]))
-    sd = float(np.std(residuals[observed]))
+    q50_pos = np.clip(q50, 0.0, None)
+    if log_residual:
+        eps = epsilon_frac * float(np.mean(q_obs[observed]))
+        eps = eps if np.isfinite(eps) and eps > 0.0 else 1e-6
+        log_qobs = np.where(observed, np.log(np.clip(q_obs, 0.0, None) + eps), np.nan)
+        log_q50 = np.log(q50_pos + eps)
+        residual = log_qobs - log_q50
+    else:
+        residual = np.where(observed, q_obs - q50, np.nan)
+
+    global_mu = float(np.nanmean(residual))
+    sd = float(np.nanstd(residual))
     if not np.isfinite(sd) or sd <= 0.0:
         sd = 1.0
-    y = (residuals - mu) / sd
 
     obs_idx = np.where(observed)[0]
     hyper_idx = _hyperparameter_sample(obs_idx)
-
-    kernel = _fit_hyperparameters(hyper_idx.reshape(-1, 1).astype(float),
-                                  y[hyper_idx], seed=seed)
+    kernel = _fit_hyperparameters(
+        hyper_idx.reshape(-1, 1).astype(float),
+        ((residual[hyper_idx] - global_mu) / sd), seed=seed,
+        max_length_scale=max_length_scale)
 
     window = int(np.clip(WINDOW_LENGTH_SCALES * _length_scale(kernel),
                          WINDOW_MIN_DAYS, WINDOW_MAX_DAYS))
@@ -259,11 +308,18 @@ def gapfill_gaussian_process(q_obs, q50, seed=0):
         if len(target) == 0:
             continue
 
-        gp = GaussianProcessRegressor(kernel=kernel, optimizer=None, normalize_y=False)
-        gp.fit(train.reshape(-1, 1).astype(float), y[train])
+        # reversion target: the local window mean residual, or the global one
+        mu = float(np.mean(residual[train])) if local_mean else global_mu
 
-        prediction = gp.predict(target.reshape(-1, 1).astype(float))
-        gapfilled[target] = q50[target] + (prediction * sd + mu)
+        gp = GaussianProcessRegressor(kernel=kernel, optimizer=None, normalize_y=False)
+        gp.fit(train.reshape(-1, 1).astype(float), (residual[train] - mu) / sd)
+
+        pred_residual = gp.predict(target.reshape(-1, 1).astype(float)) * sd + mu
+
+        if log_residual:
+            gapfilled[target] = np.exp(log_q50[target] + pred_residual) - eps
+        else:
+            gapfilled[target] = q50[target] + pred_residual
 
         del gp
 
