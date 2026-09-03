@@ -88,6 +88,10 @@ plt.rcParams.update({'font.size': 8, 'legend.labelspacing': 0.1, 'lines.linewidt
 
 # %% constants
 EPS = 0.01
+# Lower bound for any log-scaled flow (or flow-rate) axis, in mm/d. Without it a
+# single near-zero modelled value drags the axis down past 1e-20 and the whole
+# hydrograph collapses into the top of the panel. 1e-5 mm/d is ~3 mm/yr.
+FLOW_FLOOR_MMD = 1e-5
 C_OBS, C_SIM, C_CAL = 'black', 'royalblue', '#0DB14B'
 C_PARAM = ['#FCB711', '#F37021', '#CC004C', '#6460AA', '#0DB14B', '#2BA9E0']
 MAX_EXPORT_MODELS = 30
@@ -239,6 +243,7 @@ def plot_hydrograph(dates, q_obs, series, log_y=False):
     ax.set_xlim(pd.Timestamp(min(dates)), pd.Timestamp(max(dates)))
     if log_y:
         ax.set_yscale('log')
+        ax.set_ylim(bottom=FLOW_FLOOR_MMD)
     else:
         ax.set_ylim(bottom=0)
 
@@ -1618,6 +1623,7 @@ ax.fill_between(ex_obs, cal['fdc05'], cal['fdc95'], color=C_CAL, alpha=0.5,
 ax.plot(ex_obs, cal['fdc50'], color=C_CAL, linewidth=2, label='Behavioural median', zorder=2)
 ax.plot(ex_obs, q_obs_fdc, color=C_OBS, linewidth=2, label='Observed', zorder=3)
 ax.set_yscale('log')
+ax.set_ylim(bottom=FLOW_FLOOR_MMD)
 ax.set_xlabel('Exceedance (%)')
 ax.set_ylabel('Flow (mm/d)')
 ax.legend()
@@ -1907,12 +1913,14 @@ if show_analysis:
     fig_bf, ax = new_fig(17, 8, [0.10, 0.15, 0.85, 0.75])
     ax.plot(cal_dates, q_gapfilled, color=C_OBS, linewidth=0.8, label='Total flow')
     ax.plot(cal_dates, q_baseflow, color=C_BASE, linewidth=1.2, label='Baseflow')
-    ax.fill_between(cal_dates, 0, q_baseflow, color=C_BASE, alpha=0.3)
+    ax.fill_between(cal_dates, FLOW_FLOOR_MMD, np.clip(q_baseflow, FLOW_FLOOR_MMD, None),
+                    color=C_BASE, alpha=0.3)
     shade_periods(ax, cal_dates, cal.get('holdout_mask'))
     ax.set_xlabel('Date')
     ax.set_ylabel('Flow (mm/d)')
     ax.set_xlim(pd.Timestamp(cal_dates.min()), pd.Timestamp(cal_dates.max()))
     ax.set_yscale('log')
+    ax.set_ylim(bottom=FLOW_FLOOR_MMD)
     ax.legend()
     show(fig_bf, 'baseflow_separation_lyne_hollick')
 
@@ -1921,6 +1929,22 @@ if show_analysis:
         st.caption('The runoff paths SIMHYD itself produces from the calibrated best parameter '
                    'set, re-run over the whole record. This is the model\'s baseflow, not a '
                    'filter of the observed hydrograph, so it will differ from the panel above.')
+
+        # SIMHYD's internal split is not identifiable from a single streamflow
+        # series. When SUB collapses toward zero and CRAK toward one the model
+        # routes almost everything through the groundwater store, so "baseflow"
+        # becomes a relabelling of total runoff. Flag that rather than present
+        # the split as quantitative.
+        _sh_inter_frac = float(np.nansum(simhyd_split['interflow'])
+                               / max(np.nansum(simhyd_split['total']), 1e-9))
+        if simhyd_bfi > 0.9 or _sh_inter_frac < 0.02:
+            st.warning('SIMHYD is routing almost all runoff through its groundwater store on '
+                       f'this catchment (model BFI {simhyd_bfi:.2f}, interflow '
+                       f'{100 * _sh_inter_frac:.0f}% of runoff). The internal baseflow / '
+                       'interflow / infiltration-excess split is not constrained by a single '
+                       'streamflow series and is close to degenerate here. Treat the SIMHYD '
+                       'component columns and this figure as structural, not quantitative; the '
+                       'Lyne-Hollick separation above is the defensible baseflow product.')
         q_model_total = simhyd_split['total']
         q_model_base = simhyd_split['baseflow']
         q_model_inter = simhyd_split['interflow']
@@ -2094,6 +2118,8 @@ if show_analysis:
                 label=f'-dQ/dt = {recession_fit["a"]:.3g} Q$^{{{recession_fit["b"]:.2f}}}$')
         ax.set_xscale('log')
         ax.set_yscale('log')
+        ax.set_xlim(left=FLOW_FLOOR_MMD)
+        ax.set_ylim(bottom=FLOW_FLOOR_MMD)
         ax.set_xlabel('Q (mm/d)')
         ax.set_ylabel('-dQ/dt (mm/d per day)')
         ax.legend(fontsize=7)
