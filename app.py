@@ -26,7 +26,7 @@ from core.metrics import (kge, nse, score, criterion_label, composite_label,
 from core.units import cumecs_to_mmd, mmd_to_cumecs, mld_to_mmd, mmd_to_mld
 from core.calibration import calibrate_gr
 from core.gapfill import (gapfill_p50, gapfill_snapped, gapfill_gaussian_process,
-                          identify_gaps, clip_negative)
+                          gapfill_ar1, gapfill_enkf, identify_gaps, clip_negative)
 from core.baseflow import (lyne_hollick, recession_alpha, cease_to_flow,
                            DEFAULT_ALPHA, DEFAULT_PASSES, DEFAULT_REFLECT,
                            RECESSION_MIN_LENGTH, RECESSION_SKIP_DAYS,
@@ -125,7 +125,8 @@ PERIOD_METRICS = [('KGE(Q)', 'KGE', 'none'), ('NSE(Q)', 'NSE', 'none'),
                   ('KGE(log Q)', 'KGE', 'log'), ('KGE(1/Q)', 'KGE', 'inverse')]
 
 GAP_METHODS = ['Behavioural Median', 'Endpoint Snapped Residuals',
-               'Gaussian Process Residuals']
+               'Gaussian Process Residuals', 'AR(1) Residuals',
+               'Ensemble Kalman Smoother']
 
 
 # %% module compatibility check
@@ -506,11 +507,27 @@ def run_model(rain, pet, model, param_values, simhyd_overflow_to_gw=False):
 
 
 @st.cache_data(show_spinner='Gap filling...', max_entries=3, ttl=CACHE_TTL)
-def run_gapfill(q_obs, q50, method):
+def run_gapfill(q_obs, q50, method, rain=None, pet=None, best_params=None,
+                model=None, simhyd_overflow_to_gw=False):
+    """Fill the gaps by the chosen method.
+
+    The four residual methods need only q_obs and the behavioural median. The
+    Ensemble Kalman Smoother re-runs the calibrated model, so it also needs the
+    forcing, the best parameter set and the model name.
+    """
     if method == 'Behavioural Median':
         return gapfill_p50(q_obs, q50)
     if method == 'Endpoint Snapped Residuals':
         return gapfill_snapped(q_obs, q50)
+    if method == 'AR(1) Residuals':
+        return gapfill_ar1(q_obs, q50)
+    if method == 'Ensemble Kalman Smoother':
+        if (rain is None or pet is None or best_params is None
+                or len(rain) != len(q_obs) or len(pet) != len(q_obs)):
+            # forcing not aligned with the calibration record; use the GP instead
+            return gapfill_gaussian_process(q_obs, q50)
+        return gapfill_enkf(q_obs, rain, pet, best_params, model=model,
+                            simhyd_overflow_to_gw=simhyd_overflow_to_gw)
     return gapfill_gaussian_process(q_obs, q50)
 
 
@@ -1658,8 +1675,15 @@ section_break()
 st.subheader('6. Gap Filling')
 
 gap_method = st.selectbox('Gap Filling Method', GAP_METHODS)
+if gap_method == 'Ensemble Kalman Smoother':
+    st.caption('Re-runs the calibrated model as a 60-member ensemble with perturbed '
+               'rainfall and PET, then updates each gap with the observations either '
+               'side of it through the ensemble covariance. Slower than the residual '
+               'methods, and it is the only one that uses the forcing through the gap.')
 
-q_gapfilled = run_gapfill(q_obs, q50, gap_method)
+q_gapfilled = run_gapfill(q_obs, q50, gap_method, rain=rain, pet=pet,
+                          best_params=cal['best_params'], model=cal_model,
+                          simhyd_overflow_to_gw=cal.get('simhyd_overflow_to_gw', False))
 q_gapfilled, n_clipped = clip_negative(q_gapfilled, q_obs)
 
 n_missing = int(np.isnan(q_obs).sum())

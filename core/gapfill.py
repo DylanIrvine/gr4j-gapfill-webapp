@@ -1,10 +1,23 @@
 # core/gapfill.py
-# Gap filling of daily streamflow using a behavioural GR4J ensemble.
+# Gap filling of daily streamflow.
 #
-# All three methods work on the residual series (observed minus behavioural
-# median) rather than on flow directly, so the filled values inherit the shape
-# of the modelled hydrograph and are anchored to the observed record either side
-# of the gap.
+# Five methods. The first four work on the residual series (observed minus the
+# behavioural ensemble median) rather than on flow directly, so the filled
+# values inherit the shape of the modelled hydrograph and are anchored to the
+# observed record either side of the gap:
+#
+#   gapfill_p50               insert the behavioural median
+#   gapfill_snapped           linear interpolation of the residual across the gap
+#   gapfill_gaussian_process  a Gaussian process posterior over the residual
+#   gapfill_ar1               an AR(1) process on the residual, run from both
+#                             anchors towards the gap interior and blended
+#
+# The fifth needs the model itself:
+#
+#   gapfill_enkf              a fixed-interval ensemble Kalman smoother: an
+#                             ensemble of model runs with perturbed forcing,
+#                             each gap updated with the observations straddling
+#                             it through the ensemble cross-covariance
 
 # %%
 import numpy as np
@@ -12,6 +25,8 @@ import pandas as pd
 
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+
+from core.models import simulate
 
 # %% Gaussian process configuration
 # The exact GP solve is O(n^3) in time and O(n^2) in memory, so a global fit on
@@ -39,6 +54,19 @@ WINDOW_MIN_DAYS = 120         # floor on window half-width
 WINDOW_MAX_DAYS = 1500        # ceiling on window half-width
 WINDOW_MAX_POINTS = 1500      # cap on training points per local solve
 MIN_TRAIN_POINTS = 10         # below this, fall back to the snapped method
+
+# %% AR(1) residual configuration
+AR1_MIN_POINTS = 30           # residual pairs needed to estimate phi
+
+# %% ensemble Kalman smoother configuration
+ENKF_N_ENSEMBLE = 60          # model runs; runtime is linear in this
+ENKF_RAIN_CV = 0.25           # coefficient of variation of the rainfall multiplier
+ENKF_RAIN_AR = 0.4            # lag-1 correlation of the rainfall multiplier
+ENKF_PET_CV = 0.10            # coefficient of variation of the PET multiplier
+ENKF_OBS_ERR_FRAC = 0.12      # streamflow observation error, as a fraction of the flow
+ENKF_OBS_FLOOR_FRAC = 0.02    # plus a floor, as a fraction of the mean observed flow
+ENKF_WINDOW_DAYS = 180        # observations this many days either side of a gap inform it
+ENKF_MAX_OBS = 400            # cap on the observation vector per gap, for the solve
 
 
 # %% shared helpers
@@ -244,3 +272,229 @@ def gapfill_gaussian_process(q_obs, q50, seed=0):
     gapfilled[unfilled] = q50[unfilled]
 
     return gapfilled
+
+
+# %% method 4: AR(1) residuals
+def _fit_ar1(residuals):
+    """Mean and lag-1 autocorrelation of a residual series that contains gaps.
+
+    Only consecutive-day pairs where both residuals exist contribute to the
+    autocorrelation, so the estimate is not contaminated by the discontinuities
+    at gap edges.
+    """
+    residuals = _as_float(residuals)
+    finite = residuals[np.isfinite(residuals)]
+    if finite.size < AR1_MIN_POINTS:
+        return None
+
+    mu = float(np.mean(finite))
+    centred = residuals - mu
+
+    a, b = centred[:-1], centred[1:]
+    pair = np.isfinite(a) & np.isfinite(b)
+    if pair.sum() < AR1_MIN_POINTS:
+        return None
+
+    c0 = float(np.mean(centred[np.isfinite(centred)] ** 2))
+    c1 = float(np.mean(a[pair] * b[pair]))
+    if c0 <= 0:
+        return None
+
+    phi = float(np.clip(c1 / c0, 0.0, 0.999))
+    return mu, phi
+
+
+def gapfill_ar1(q_obs, q50):
+    """Fill gaps with an AR(1) process on the residual, blended from both anchors.
+
+    The residual r = observed - behavioural median is modelled as
+    r(t) = mu + phi * (r(t-1) - mu). Its noise-free expectation is propagated
+    forward from the last observation before the gap and backward from the first
+    observation after it; the two predictions are blended linearly across the
+    gap, so the fill is anchored at both edges and decays towards the mean
+    residual in the interior of a long gap. phi is the lag-1 autocorrelation of
+    the observed residual series, so the decay rate is set by the data rather
+    than assumed. With phi close to 1 this reduces to the snapped method; with
+    phi small it reduces to the behavioural median.
+
+    An unanchored gap at the start or end of the record uses the single
+    available anchor. Too few residuals to estimate phi falls back to snapped.
+    """
+    q_obs = _as_float(q_obs)
+    q50 = _as_float(q50)
+    gapfilled = q_obs.copy()
+
+    missing = ~np.isfinite(q_obs)
+    if not missing.any():
+        return gapfilled
+
+    residuals = q_obs - q50
+    fit = _fit_ar1(residuals)
+    if fit is None:
+        return gapfill_snapped(q_obs, q50)
+    mu, phi = fit
+
+    n = len(q_obs)
+    for gap in identify_gaps(q_obs):
+        s, e = gap['start_idx'], gap['end_idx']
+        length = e - s + 1
+        k = np.arange(1, length + 1)                     # 1..L within the gap
+
+        left = residuals[s - 1] if s > 0 and np.isfinite(residuals[s - 1]) else None
+        right = residuals[e + 1] if e < n - 1 and np.isfinite(residuals[e + 1]) else None
+
+        forward = mu + phi ** k * (left - mu) if left is not None else None
+        backward = mu + phi ** (length + 1 - k) * (right - mu) if right is not None else None
+
+        if forward is not None and backward is not None:
+            w = k / (length + 1)                          # 0 at the left edge, 1 at the right
+            r_gap = (1.0 - w) * forward + w * backward
+        elif forward is not None:
+            r_gap = forward
+        elif backward is not None:
+            r_gap = backward
+        else:
+            r_gap = np.full(length, mu)
+
+        gapfilled[s:e + 1] = q50[s:e + 1] + r_gap
+
+    return gapfilled
+
+
+# %% method 5: ensemble Kalman smoother
+def _perturbed_forcing(precip, pet, n_ensemble, rain_cv, rain_ar, pet_cv, seed):
+    """Ensembles of rainfall and PET.
+
+    Rainfall gets a temporally correlated lognormal multiplier (an AR(1) in log
+    space), so a wet or dry bias persists over a spell rather than averaging out
+    day to day. PET gets a small independent multiplicative perturbation. Both
+    multipliers are mean-one so the ensemble is unbiased with respect to the
+    supplied forcing.
+    """
+    rng = np.random.default_rng(seed)
+    n = len(precip)
+
+    log_sd = np.sqrt(np.log(1.0 + rain_cv ** 2))
+    innov_sd = log_sd * np.sqrt(1.0 - rain_ar ** 2)
+
+    rain_ens = np.empty((n_ensemble, n))
+    pet_ens = np.empty((n_ensemble, n))
+    for m in range(n_ensemble):
+        x = np.empty(n)
+        x[0] = rng.normal(0.0, log_sd)
+        noise = rng.normal(0.0, innov_sd, n)
+        for t in range(1, n):
+            x[t] = rain_ar * x[t - 1] + noise[t]
+        multiplier = np.exp(x - 0.5 * log_sd ** 2)        # mean-one lognormal
+        rain_ens[m] = np.clip(precip * multiplier, 0.0, None)
+        pet_ens[m] = np.clip(pet * (1.0 + rng.normal(0.0, pet_cv, n)), 0.0, None)
+
+    return rain_ens, pet_ens
+
+
+def gapfill_enkf(q_obs, precip, pet, params, model='GR4J', *,
+                 n_ensemble=ENKF_N_ENSEMBLE, rain_cv=ENKF_RAIN_CV,
+                 rain_ar=ENKF_RAIN_AR, pet_cv=ENKF_PET_CV,
+                 obs_err_frac=ENKF_OBS_ERR_FRAC, obs_floor_frac=ENKF_OBS_FLOOR_FRAC,
+                 window_days=ENKF_WINDOW_DAYS, max_obs=ENKF_MAX_OBS, seed=0,
+                 simhyd_overflow_to_gw=False, return_spread=False):
+    """Fill gaps with a fixed-interval ensemble Kalman smoother.
+
+    An ensemble of runs of the calibrated model is generated by perturbing the
+    rainfall (a temporally correlated lognormal multiplier) and PET, so the
+    ensemble spread carries input uncertainty. Each gap is then updated with the
+    observed flows in a window straddling it, using the ensemble cross-covariance
+    between the gap-day flows and the windowed observations:
+
+        q_gap  <-  q_gap_mean  +  Cov(q_gap, q_win) [Cov(q_win) + R]^-1 (y_win - q_win_mean)
+
+    R is a heteroscedastic observation-error variance, a fraction of the flow
+    plus a floor. The correction on a gap day scales with its ensemble
+    covariance to the observations, which is largest next to the observed record,
+    so the fill is drawn towards the data from the gap start (pre-gap
+    observations dominate), from the gap end (post-gap observations dominate),
+    and blends across the interior. Both sides of the gap inform the fill.
+
+    This is a forcing-driven smoother: it does not sequentially update the
+    model's internal stores. For offline single-gauge gap filling with a
+    complete forcing record that is the appropriate simplification, and it keeps
+    the method to one pass over simulate().
+
+    Parameters
+    ----------
+    q_obs : array-like, mm/d, may contain NaN
+    precip, pet : array-like, mm/d, complete, the same length as q_obs
+    params : dict, one calibrated parameter set for `model`
+    model : one of 'GR4J', 'GR5J', 'GR6J', 'SIMHYD'
+    return_spread : if True, also return the ensemble standard deviation on the
+        gap days (NaN elsewhere) as a second array
+
+    Returns
+    -------
+    filled series (and, if return_spread, the gap-day standard deviation)
+    """
+    q_obs = _as_float(q_obs)
+    precip = _as_float(precip)
+    pet = _as_float(pet)
+    gapfilled = q_obs.copy()
+    spread = np.full(len(q_obs), np.nan)
+
+    missing = ~np.isfinite(q_obs)
+    if not missing.any():
+        return (gapfilled, spread) if return_spread else gapfilled
+
+    n = len(q_obs)
+    observed = np.where(np.isfinite(q_obs))[0]
+    if observed.size < MIN_TRAIN_POINTS:
+        filled = gapfill_snapped(q_obs, np.full(n, np.nanmean(q_obs)))
+        return (filled, spread) if return_spread else filled
+
+    rain_ens, pet_ens = _perturbed_forcing(precip, pet, n_ensemble, rain_cv,
+                                           rain_ar, pet_cv, seed)
+
+    ensemble = np.empty((n_ensemble, n))
+    for m in range(n_ensemble):
+        ensemble[m] = simulate(rain_ens[m], pet_ens[m], params, model=model,
+                               simhyd_overflow_to_gw=simhyd_overflow_to_gw)
+
+    mean = ensemble.mean(axis=0)
+    anomaly = ensemble - mean                             # n_ensemble x n
+    denom = n_ensemble - 1
+
+    mean_flow = float(np.mean(q_obs[observed]))
+    floor_var = (obs_floor_frac * mean_flow) ** 2
+
+    for gap in identify_gaps(q_obs):
+        s, e = gap['start_idx'], gap['end_idx']
+        gidx = np.arange(s, e + 1)
+        gidx = gidx[missing[gidx]]
+        if gidx.size == 0:
+            continue
+
+        lo, hi = s - window_days, e + window_days
+        widx = observed[(observed >= lo) & (observed <= hi)]
+        if widx.size == 0:
+            gapfilled[gidx] = mean[gidx]
+            continue
+        if widx.size > max_obs:
+            centre = 0.5 * (s + e)
+            widx = np.sort(widx[np.argsort(np.abs(widx - centre))[:max_obs]])
+
+        ha = anomaly[:, widx]                             # n_ensemble x n_obs
+        ga = anomaly[:, gidx]                             # n_ensemble x n_gap
+
+        pyy = ha.T @ ha / denom
+        r_diag = (obs_err_frac * np.maximum(q_obs[widx], 0.0)) ** 2 + floor_var
+        pyy[np.diag_indices_from(pyy)] += r_diag
+
+        innovation = q_obs[widx] - mean[widx]
+        gain_rhs = np.linalg.solve(pyy, innovation)       # n_obs
+        update = (ga.T @ ha / denom) @ gain_rhs           # n_gap
+
+        gapfilled[gidx] = mean[gidx] + update
+        spread[gidx] = ensemble[:, gidx].std(axis=0)
+
+    unfilled = ~np.isfinite(gapfilled)
+    gapfilled[unfilled] = mean[unfilled]
+
+    return (gapfilled, spread) if return_spread else gapfilled
