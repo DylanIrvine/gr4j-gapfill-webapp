@@ -774,13 +774,12 @@ with head_logo:
 
 
 # %% run counter
-# Count once per browser session (Streamlit reruns the whole script on every
-# widget change). Preferred backend is Upstash Redis (an atomic INCR that
-# survives redeploys); it needs, in st.secrets under [redis] or as environment
-# variables:
-#     rest_url  / UPSTASH_REDIS_REST_URL
+# Counts each completed calibration (see the Calibrate block below), not page
+# loads. Preferred backend is Upstash Redis (an atomic INCR that survives
+# redeploys); it needs, in st.secrets under [redis] or as environment variables:
+#     rest_url   / UPSTASH_REDIS_REST_URL
 #     rest_token / UPSTASH_REDIS_REST_TOKEN
-#     key       / HYDROSTITCH_RUN_COUNT_KEY   (optional, default "hydrostitch:runs")
+#     key        / HYDROSTITCH_RUN_COUNT_KEY   (optional, default "hydrostitch:runs")
 # One Upstash database can hold many counters - just give each app its own key.
 # Without Redis it falls back to a JSON file, then to an in-memory tally per
 # running container. See core/usage.py.
@@ -811,23 +810,29 @@ def _in_memory_run_count():
     return {'n': 0}
 
 
-if 'run_counted' not in st.session_state:
-    _rc_path = _run_count_setting('run_count_path', 'HYDROSTITCH_RUN_COUNT_PATH', None) or None
-    _rc_start = _run_count_setting('run_count_start', 'HYDROSTITCH_RUN_COUNT_START', 0)
-    _rc_url = _run_count_secret('rest_url', 'UPSTASH_REDIS_REST_URL')
-    _rc_token = _run_count_secret('rest_token', 'UPSTASH_REDIS_REST_TOKEN')
-    _rc_key = _run_count_secret('key', 'HYDROSTITCH_RUN_COUNT_KEY') or 'hydrostitch:runs'
-    _n = _record_run(path=_rc_path, start=_rc_start, redis_url=_rc_url,
-                     redis_token=_rc_token, redis_key=_rc_key)
-    if _n is None:                       # no backend available: this container only
-        _mem = _in_memory_run_count()
-        _mem['n'] += 1
-        _n = _mem['n']
-    st.session_state['run_count'] = _n
-    st.session_state['run_counted'] = True
+def count_completed_run():
+    """Record one completed run and return the new total (never raises)."""
+    try:
+        rc_path = _run_count_setting('run_count_path', 'HYDROSTITCH_RUN_COUNT_PATH', None) or None
+        rc_start = _run_count_setting('run_count_start', 'HYDROSTITCH_RUN_COUNT_START', 0)
+        total = _record_run(
+            path=rc_path, start=rc_start,
+            redis_url=_run_count_secret('rest_url', 'UPSTASH_REDIS_REST_URL'),
+            redis_token=_run_count_secret('rest_token', 'UPSTASH_REDIS_REST_TOKEN'),
+            redis_key=_run_count_secret('key', 'HYDROSTITCH_RUN_COUNT_KEY') or 'hydrostitch:runs',
+        )
+    except Exception:
+        total = None
+    if total is None:                    # no persistent backend: this container only
+        mem = _in_memory_run_count()
+        mem['n'] += 1
+        total = mem['n']
+    st.session_state['run_count'] = total
+    return total
+
 
 if st.session_state.get('run_count'):
-    st.caption(f"Sessions run: {st.session_state['run_count']:,}")
+    st.caption(f"HydroSTITCH runs completed: {st.session_state['run_count']:,}")
 
 st.write(
     'HydroSTITCH runs several lumped parameter conceptual rainfall-runoff models, calibrating the '
@@ -1455,6 +1460,11 @@ if st.button('Calibrate', type='primary', disabled=not (bounds_valid and holdout
                    for name in param_names})
     history.append(record)
     st.session_state['history'] = history[-MAX_HISTORY:]
+
+    # count this completed run; harmless if no counter backend is configured
+    _run_total = count_completed_run()
+    if _run_total is not None:
+        st.success(f'Calibration complete. This was run #{_run_total:,} of HydroSTITCH.')
 
     del ensemble, fdc_ensemble
     gc.collect()
