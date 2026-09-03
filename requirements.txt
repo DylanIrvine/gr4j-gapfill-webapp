@@ -1,15 +1,19 @@
-streamlit
-numpy
-pandas
-matplotlib
-scipy
-reportlab
-openpyxl
-scikit-learn
-xlsxwriter
+# Pinned so a hosted deploy (Streamlit Cloud) resolves the same scientific stack
+# that works locally. numba pins a numpy ceiling; leaving these unpinned lets pip
+# install an old numba, which drags numpy backwards and breaks the scikit-learn /
+# scipy ABI (an ImportError at the core.gapfill import). numba 0.62 supports
+# numpy < 2.4, so the two ranges below cannot conflict.
+#
+# Set the deploy Python version to 3.12 or 3.13 (Streamlit Cloud: app settings,
+# not runtime.txt). numba 0.62 has wheels for both.
 
-# numba is deliberately NOT listed here. It pins a supported numpy range, and on
-# a hosted deploy (Streamlit Cloud) pip then drags numpy backwards to satisfy it,
-# which breaks the scikit-learn / scipy wheels and the app fails to import. See
-# the note in core/models.py. The models fall back to pure Python without it
-# (identical results, slower); install numba in a local environment for speed.
+streamlit>=1.40
+numpy>=1.26,<2.4
+pandas>=2.0
+matplotlib>=3.8
+scipy>=1.13
+scikit-learn>=1.4
+numba>=0.62
+reportlab>=4.0
+openpyxl>=3.1
+xlsxwriter>=3.1
