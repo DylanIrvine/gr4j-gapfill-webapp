@@ -785,10 +785,16 @@ with head_logo:
 # Without Redis it falls back to a JSON file, then to an in-memory tally per
 # running container. See core/usage.py.
 def _run_count_secret(name, env):
+    # forgiving of how the Upstash values were pasted: st.secrets [redis] section,
+    # a top-level key (lower name or the raw UPSTASH_* name), then os.environ.
     try:
-        section = st.secrets['redis'] if 'redis' in st.secrets else {}
-        if name in section:
-            return str(section[name])
+        sec = st.secrets
+        if 'redis' in sec and name in sec['redis']:
+            return str(sec['redis'][name])
+        if name in sec:
+            return str(sec[name])
+        if env in sec:
+            return str(sec[env])
     except Exception:
         pass
     return os.environ.get(env)
@@ -832,8 +838,29 @@ def count_completed_run():
     return total
 
 
-if st.session_state.get('run_count'):
-    st.caption(f"HydroSTITCH runs completed: {st.session_state['run_count']:,}")
+@st.cache_data(ttl=90, show_spinner=False)
+def _run_count_status():
+    from core.usage import status as _usage_status
+    return _usage_status(
+        path=_run_count_setting('run_count_path', 'HYDROSTITCH_RUN_COUNT_PATH', None) or None,
+        redis_url=_run_count_secret('rest_url', 'UPSTASH_REDIS_REST_URL'),
+        redis_token=_run_count_secret('rest_token', 'UPSTASH_REDIS_REST_TOKEN'),
+        redis_key=_run_count_secret('key', 'HYDROSTITCH_RUN_COUNT_KEY') or 'hydrostitch:runs',
+    )
+
+
+_rc = _run_count_status()
+_rc_total = st.session_state.get('run_count') or _rc.get('count')
+if _rc_total:
+    st.caption(f"HydroSTITCH runs completed: {_rc_total:,}")
+if _rc['backend'] == 'redis-error':
+    st.caption(f":orange[Run counter: Redis is configured but not reachable "
+               f"({_rc['detail']}); the count is not persisting. Check the "
+               f"rest_url / rest_token secrets.]")
+elif _rc['backend'] in ('file', 'memory'):
+    st.caption(':grey[Run counter is local to this deployment and resets on '
+               'redeploy. Add Upstash Redis secrets ([redis] rest_url, '
+               'rest_token) to make it persistent.]')
 
 st.write(
     'HydroSTITCH runs several lumped parameter conceptual rainfall-runoff models, calibrating the '

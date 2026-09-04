@@ -128,3 +128,29 @@ def read_only(path=None, *, redis_url=None, redis_token=None,
             pass
     current, _ = _read(_resolve_path(path))
     return current
+
+
+def status(path=None, *, redis_url=None, redis_token=None,
+           redis_key=DEFAULT_REDIS_KEY):
+    """Which backend is live and the current count, without incrementing.
+
+    backend is one of:
+      'redis'        Redis reachable; count is persistent across redeploys
+      'redis-error'  Redis configured but the call failed (see detail)
+      'file'         local JSON file; count resets on a Streamlit Cloud redeploy
+      'memory'       neither available; count is per running container
+    """
+    if redis_url and redis_token:
+        try:
+            n = _redis_get(redis_url, redis_token, redis_key or DEFAULT_REDIS_KEY)
+            return {'backend': 'redis', 'count': int(n),
+                    'detail': redis_key or DEFAULT_REDIS_KEY}
+        except Exception as exc:
+            return {'backend': 'redis-error', 'count': None,
+                    'detail': f'{type(exc).__name__}: {exc}'}
+    try:
+        current, _ = _read(_resolve_path(path))
+        return {'backend': 'file', 'count': int(current),
+                'detail': str(_resolve_path(path))}
+    except OSError:
+        return {'backend': 'memory', 'count': None, 'detail': ''}

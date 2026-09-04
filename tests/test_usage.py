@@ -66,3 +66,23 @@ def test_redis_failure_falls_back_to_file(tmp_path, monkeypatch):
 def test_no_redis_creds_uses_file(tmp_path):
     p = tmp_path / "count.json"
     assert increment(p, redis_url=None, redis_token=None) == 1
+
+
+def test_status_reports_backend(tmp_path, monkeypatch):
+    from core.usage import status
+
+    p = tmp_path / "count.json"
+    assert status(p)["backend"] == "file"
+    increment(p)
+    assert status(p) == {"backend": "file", "count": 1, "detail": str(p)}
+
+    monkeypatch.setattr("core.usage._redis_get", lambda *a, **k: 4321)
+    s = status(p, redis_url="https://x", redis_token="t", redis_key="hydrostitch:runs")
+    assert s["backend"] == "redis" and s["count"] == 4321
+
+    def boom(*a, **k):
+        raise RuntimeError("bad token")
+
+    monkeypatch.setattr("core.usage._redis_get", boom)
+    s = status(p, redis_url="https://x", redis_token="t")
+    assert s["backend"] == "redis-error" and "bad token" in s["detail"]
