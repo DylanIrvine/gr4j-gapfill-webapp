@@ -45,6 +45,7 @@ from core.rainfall import (annual_rainfall, spi, cumulative_by_water_year,
 from core.plots import (cumulative_spaghetti, anomaly_bars, rainfall_runoff_cumulative)
 from core.baseflow import recession_analysis
 from core.usage import increment as _record_run
+from core.dates import parse_dates, infer_dayfirst, DateParseError
 
 # %% interface styling
 # Streamlit's primary button is red in the default theme, and the workflow is a
@@ -897,26 +898,57 @@ pet_col = st.selectbox('PET Column', columns)
 flow_col = st.selectbox('Flow Column', columns)
 
 DATE_FORMATS = {
-    'dd/mm/yyyy': '%d/%m/%Y',
-    'mm/dd/yyyy': '%m/%d/%Y',
-    'yyyy/mm/dd': '%Y/%m/%d',
+    'Auto (detect day / month)': None,
+    'Day first  d/m/yyyy or dd/mm/yyyy': '%d/%m/%Y',
+    'Month first  m/d/yyyy or mm/dd/yyyy': '%m/%d/%Y',
+    'ISO  yyyy-mm-dd': '%Y-%m-%d',
+    'Day first, 2-digit year  dd/mm/yy': '%d/%m/%y',
 }
 date_format_label = st.selectbox('Date Format', list(DATE_FORMATS), index=0)
+st.caption('Auto reads each row on its own and works out day-first from the data. '
+           'One- and two-digit days and months, ISO rows, month names and trailing '
+           'times are all handled; a column that parses out of chronological order '
+           'is reported rather than silently scrambled.')
 
 section_break()
 st.subheader('Catchment Information')
 area_km2 = st.number_input('Catchment Area (km²)', min_value=0.001, value=1000.0, step=1.0)
 flow_units = st.selectbox('Flow Units', FLOW_UNITS)
 
+_date_format = DATE_FORMATS[date_format_label]
 try:
-    #dates = pd.to_datetime(df[date_col], dayfirst=True)
-    date_strings = df[date_col].astype(str).str.strip().str.replace(r'[-.]', '/', regex=True)
-    dates = pd.to_datetime(date_strings, format=DATE_FORMATS[date_format_label])
+    if _date_format is None:
+        _hint = infer_dayfirst(df[date_col])
+        _dates_idx = parse_dates(df[date_col],
+                                 dayfirst=(True if _hint is None else _hint),
+                                 coerce=True)
+        if _hint is None:
+            st.info('Could not tell day-first from month-first from the data; assumed '
+                    'day-first (Australian). If the parsed dates below look wrong, pick '
+                    'an explicit format.')
+    else:
+        _dates_idx = parse_dates(df[date_col], date_format=_date_format, coerce=True)
+except DateParseError as exc:
+    st.error(str(exc))
+    st.stop()
+except Exception as exc:
+    st.error(f'Could not parse the date column: {exc}')
+    st.stop()
+
+_bad_dates = np.asarray(_dates_idx.isna())
+if _bad_dates.any():
+    st.warning(f'{int(_bad_dates.sum())} row(s) had an unreadable date and were excluded.')
+    df = df[~_bad_dates].reset_index(drop=True)
+    _dates_idx = _dates_idx[~_bad_dates]
+
+dates = pd.DatetimeIndex(_dates_idx)
+
+try:
     rain = np.asarray(df[rain_col], dtype=float)
     pet = np.asarray(df[pet_col], dtype=float)
     flow = np.asarray(df[flow_col], dtype=float)
 except Exception as exc:
-    st.error(f'Could not parse the selected columns: {exc}')
+    st.error(f'Could not read the rain, PET or flow column: {exc}')
     st.stop()
 
 q_obs_mmd = to_mmd(flow, flow_units, area_km2)
