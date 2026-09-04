@@ -1876,7 +1876,7 @@ if show_evaluation:
 
     if eff_table is not None and not eff_table.empty:
         st.markdown('**Efficiency criteria under every transformation**')
-        st.dataframe(eff_table.set_index('Model').T, use_container_width=True)
+        st.dataframe(eff_table.set_index('Model').T.round(4), use_container_width=True)
         st.caption('KGE is shown with its three components. A composite of 0.85 built from a '
                    'correlation of 0.95 and a variability ratio of 1.3 describes a very different '
                    'failure from one built from a correlation of 0.87 and a variability ratio of '
