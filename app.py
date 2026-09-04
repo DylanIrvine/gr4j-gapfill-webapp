@@ -941,7 +941,10 @@ if _bad_dates.any():
     df = df[~_bad_dates].reset_index(drop=True)
     _dates_idx = _dates_idx[~_bad_dates]
 
-dates = pd.DatetimeIndex(_dates_idx)
+# a plain datetime64 Series (not a DatetimeIndex): that is the type the rest of
+# the app and the @st.cache_data functions were written against - Streamlit can
+# hash a Series but not a DatetimeIndex (it iterates it into Timestamps).
+dates = pd.Series(pd.DatetimeIndex(_dates_idx)).reset_index(drop=True)
 
 try:
     rain = np.asarray(df[rain_col], dtype=float)
