@@ -850,17 +850,28 @@ def _run_count_status():
 
 
 _rc = _run_count_status()
-_rc_total = st.session_state.get('run_count') or _rc.get('count')
-if _rc_total:
-    st.caption(f"HydroSTITCH runs completed: {_rc_total:,}")
-if _rc['backend'] == 'redis-error':
-    st.caption(f":orange[Run counter: Redis is configured but not reachable "
-               f"({_rc['detail']}); the count is not persisting. Check the "
-               f"rest_url / rest_token secrets.]")
-elif _rc['backend'] in ('file', 'memory'):
-    st.caption(':grey[Run counter is local to this deployment and resets on '
-               'redeploy. Add Upstash Redis secrets ([redis] rest_url, '
-               'rest_token) to make it persistent.]')
+_run_count_slot = st.empty()
+
+
+def show_run_count():
+    """Render the run total into a fixed slot below the byline. Called once at
+    the top and again after a completed run, so the header reflects the new
+    total on the same script run instead of lagging by one interaction."""
+    total = st.session_state.get('run_count') or _rc.get('count')
+    with _run_count_slot.container():
+        if total:
+            st.caption(f"HydroSTITCH runs completed: {total:,}")
+        if _rc['backend'] == 'redis-error':
+            st.caption(f":orange[Run counter: Redis is configured but not reachable "
+                       f"({_rc['detail']}); the count is not persisting. Check the "
+                       f"rest_url / rest_token secrets.]")
+        elif _rc['backend'] in ('file', 'memory'):
+            st.caption(':grey[Run counter is local to this deployment and resets on '
+                       'redeploy. Add Upstash Redis secrets (rest_url, rest_token) '
+                       'to make it persistent.]')
+
+
+show_run_count()
 
 st.write(
     'HydroSTITCH runs several lumped parameter conceptual rainfall-runoff models, calibrating the '
@@ -1525,6 +1536,7 @@ if st.button('Calibrate', type='primary', disabled=not (bounds_valid and holdout
 
     # count this completed run; harmless if no counter backend is configured
     _run_total = count_completed_run()
+    show_run_count()                         # refresh the header total on this run
     if _run_total is not None:
         st.success(f'Calibration complete. This was run #{_run_total:,} of HydroSTITCH.')
 
