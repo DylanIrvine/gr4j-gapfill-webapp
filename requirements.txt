@@ -7,7 +7,7 @@
 # Set the deploy Python version to 3.12 or 3.13 (Streamlit Cloud: app settings,
 # not runtime.txt). numba 0.62 has wheels for both.
 
-streamlit>=1.40
+streamlit>=1.50
 numpy>=1.26,<2.4
 pandas>=2.0
 matplotlib>=3.8

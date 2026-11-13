@@ -1,0 +1,8 @@
+[theme]
+# dark, with the Streamlit default red. Same look as the other apps in the suite
+base = "dark"
+primaryColor = "#FF4B4B"
+
+[browser]
+# do not send Streamlit usage statistics from the visitor's browser
+gatherUsageStats = false

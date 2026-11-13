@@ -6,6 +6,7 @@
 # together, not just the core functions.
 
 import io
+import os
 
 import numpy as np
 import pandas as pd
@@ -15,6 +16,9 @@ from streamlit.testing.v1 import AppTest
 
 from core.models import simulate
 from tests.conftest import _synthetic_forcing
+
+# newer Streamlit resolves a relative path against this file, not the working directory
+APP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py")
 
 
 class _FakeUpload(io.BytesIO):
@@ -50,7 +54,7 @@ def _run_app(monkeypatch, model, params, calibrate=False):
     monkeypatch.setattr("streamlit.file_uploader",
                         lambda *a, **k: _FakeUpload(data, name))
 
-    at = AppTest.from_file("app.py", default_timeout=120)
+    at = AppTest.from_file(APP, default_timeout=120)
     at.run()
     assert not at.exception, f"{model}: script raised on first run"
 

@@ -2,7 +2,7 @@
 # HydroSTITCH: rainfall-runoff calibration, gap filling and analysis.
 # Models: the GR family (GR4J, GR5J, GR6J) and SIMHYD.
 # Dylan Irvine, Charles Darwin University
-# Requires streamlit >= 1.30
+# Requires streamlit >= 1.50
 
 import gc
 import inspect
@@ -16,6 +16,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.transforms as mtransforms
 
 from core.models import (simulate, simhyd_components, MODELS, MODEL_PARAMS,
                          MODEL_INFO, PARAM_NAMES, PARAM_BOUNDS, PARAM_LABELS,
@@ -46,6 +47,14 @@ from core.plots import (cumulative_spaghetti, anomaly_bars, rainfall_runoff_cumu
 from core.baseflow import recession_analysis
 from core.usage import increment as _record_run
 from core.dates import parse_dates, infer_dayfirst, DateParseError
+
+# %% page setup
+# browser tab title and icon. Must be the first Streamlit call
+APP_NAME = 'HydroSTITCH'
+# bump on each release. Also used in the citation, the results workbook and the zip
+APP_VERSION = '1.0'
+APP_URL = 'https://gr4j-gapfill-webapp.streamlit.app/'
+st.set_page_config(page_title=APP_NAME, page_icon='docs/HS_favicon.png')
 
 # %% interface styling
 # Streamlit's primary button is red in the default theme, and the workflow is a
@@ -102,6 +111,7 @@ MAX_HISTORY = 20
 C_BASE = '#2BA9E0'
 FIGURE_DPI = 300
 CREDIT = 'Produced with HydroSTITCH, Charles Darwin University'
+WATERMARK = 'Dylan Irvine, Charles Darwin University'
 LONG_FORCING_GAP = 5
 CACHE_TTL = 3600
 
@@ -208,6 +218,13 @@ def new_fig(w_cm, h_cm, rect):
     return fig, fig.add_axes(rect)
 
 
+def add_watermark(fig):
+    # small grey line in its own strip below the figure, bottom left, so it can
+    # be cropped off without touching the plot
+    below = fig.transFigure + mtransforms.ScaledTranslation(0, -5 / 72, fig.dpi_scale_trans)
+    fig.text(0.0, 0.0, WATERMARK, transform=below, ha='left', va='top', fontsize=6, color='0.5')
+
+
 def show(fig, name=None):
     """Render a figure, keep a PNG copy for the download package, then close it.
 
@@ -217,12 +234,17 @@ def show(fig, name=None):
     resets on every script run, so it always holds the figures currently on
     screen rather than accumulating stale ones.
     """
+    add_watermark(fig)
     if name is not None:
         png = BytesIO()
         fig.savefig(png, format='png', dpi=FIGURE_DPI, bbox_inches='tight', facecolor='white')
         FIGURES[name] = png.getvalue()
 
     st.pyplot(fig)
+    if name is not None:
+        # on_click='ignore' so a download does not rerun the whole page
+        st.download_button(f'Download PNG ({FIGURE_DPI} dpi)', FIGURES[name], file_name=f'{name}.png',
+                           mime='image/png', key=f'download_fig_{name}', on_click='ignore')
     plt.close(fig)
 
 
@@ -757,6 +779,7 @@ def build_metadata_df(cal, gap_method, n_missing, n_clipped, ensemble_units, she
         ('FilledFlag', '1 where the observed record was missing and has been filled'),
         ('Period', 'Warm-up, Calibration or Validation membership of each day'),
         ('Model implementation', 'Transcribed from airGR Fortran and verified against it'),
+        ('HydroSTITCH version', APP_VERSION),
     ]
 
     return pd.DataFrame(items, columns=['Item', 'Value'])
@@ -769,6 +792,7 @@ with head_text:
     st.title('HYDROSTITCH')
     st.subheader("HYDROlogical Signatures, Time-Series Infilling and Tools for Catchment Hydrology")
     st.write('Dylan Irvine, Charles Darwin University.\n')
+    st.caption(f'Version {APP_VERSION}')
 
 with head_logo:
     st.image('docs/HS_Logo.png', width='stretch')
@@ -884,8 +908,35 @@ st.write(
     'Notably, numerous metrics are provided to ensure that you do not obtain a model with a '
     'good fit, but with highly inappropriate model parameters.\n\n'
 )
-with st.expander('**Selected References**'):
+with st.expander('**Privacy and data handling**'):
+    st.markdown(
+        '**Your data**\n'
+        '- The file you upload is read into memory and processed on the server. It is not saved to '
+        'a database or to any permanent storage.\n'
+        f'- Results are held in the server memory for up to {CACHE_TTL // 60} minutes so the page '
+        'redraws quickly, then discarded. They are also cleared whenever the app restarts.\n'
+        '- Nothing is sent to a third party. The models run inside the app.\n'
+        '- The results exist only in the files you download.\n\n'
+        '**You**\n'
+        '- No login, and no record kept by this app of who you are or where you are. The app does '
+        'not log IP addresses or locations.\n'
+        '- The only thing recorded is a single running total: the number of calibration runs '
+        'completed (and the time it was last updated). It has no link to any user or file.\n\n'
+        '**What this does not cover**\n'
+        '- Processing happens on the server that hosts the app, not on your computer. If you are '
+        'using the public web version, your file travels to that host (which may be outside '
+        'Australia). The hosting provider and the Streamlit framework may use their own cookies '
+        'and keep their own server logs, under their own privacy policies.\n'
+        '- If your data are confidential or subject to a data agreement, run the app on your own '
+        'machine. The code is open source (GPL-2).')
+
+with st.expander('**How to cite and references**'):
   st.write(
+    'This app:\n\n'
+    f'Irvine, D.J. ({datetime.now().year}). HydroSTITCH: Hydrological Signatures, Time-series Infilling '
+    f'and Tools for Catchment Hydrology (version {APP_VERSION}) [Web application]. Charles Darwin '
+    f'University. {APP_URL}\n\n'
+    'Please also cite the model you used (below).\n\n'
     'GR models:\n\n'
     'Perrin, C., Michel, C., and Andréassian, V. (2003). Improvement of a parsimonious model for '
     'streamflow simulation. Journal of Hydrology 279(1), 275-289.\n\n'
@@ -908,6 +959,10 @@ with st.expander('**Selected References**'):
     'Coron, L., Thirel, G., Delaigue, O., Perrin, C., and Andréassian, V. (2017). The suite of lumped '
     'GR hydrological models in an R package. Environmental Modelling and Software 94, 166-171.\n\n'
     )
+
+# resolution of the per-figure download buttons and of the figures in the zip
+FIGURE_DPI = st.radio('Figure download resolution (dpi)', [300, 600], horizontal=True,
+                      help='600 dpi makes larger files and redraws the page more slowly.')
 
 # %% 1. upload
 st.subheader('1. Upload Data')
@@ -1116,7 +1171,7 @@ with st.expander('Model structures and what each parameter does'):
              'Typical': spec.typical}
             for name, spec in MODEL_PARAMS[model].items()
         ]),
-        hide_index=True, use_container_width=True)
+        hide_index=True, width='stretch')
 
     st.caption('Full range is what the optimiser is permitted to explore. Typical is what '
                'these parameters usually take on Australian catchments. A calibrated value '
@@ -1430,7 +1485,7 @@ if not bounds_valid:
     st.error('Fix the parameter bounds above before calibrating.')
 
 if st.button('Calibrate', type='primary', disabled=not (bounds_valid and holdout_ok),
-             use_container_width=True):
+             width='stretch'):
 
     cal_bar = st.progress(0.0, text=f'Calibrating {model}...')
     generation = {'n': 0}
@@ -1687,7 +1742,7 @@ if cal.get('holdout_years', 0) and val_score_mask.any():
         'Validation (unseen)': [val_scores[label] for label, _, _ in PERIOD_METRICS],
     })
     perf['Change'] = perf['Validation (unseen)'] - perf['Calibration (seen)']
-    st.dataframe(perf.round(3), hide_index=True, use_container_width=True)
+    st.dataframe(perf.round(3), hide_index=True, width='stretch')
 
     # kept on the cal dict so the export section and readme report the same
     # numbers without recomputing them
@@ -1915,7 +1970,7 @@ if show_evaluation:
 
     if eff_table is not None and not eff_table.empty:
         st.markdown('**Efficiency criteria under every transformation**')
-        st.dataframe(eff_table.set_index('Model').T.round(4), use_container_width=True)
+        st.dataframe(eff_table.set_index('Model').T.round(4), width='stretch')
         st.caption('KGE is shown with its three components. A composite of 0.85 built from a '
                    'correlation of 0.95 and a variability ratio of 1.3 describes a very different '
                    'failure from one built from a correlation of 0.87 and a variability ratio of '
@@ -1925,7 +1980,7 @@ if show_evaluation:
 
     if sig_report is not None and not sig_report.empty:
         st.markdown('**Hydrological signatures, observed against modelled**')
-        st.dataframe(sig_report, hide_index=True, use_container_width=True)
+        st.dataframe(sig_report, hide_index=True, width='stretch')
         products['signature_evaluation'] = sig_report
 
         poor = worst_signatures(sig_report, threshold=25.0)
@@ -2607,7 +2662,7 @@ else:
     holdout_readme_lines = ['', 'Validation hold-out: none (calibrated on all observed data)']
 
 readme_lines = [
-    'HydroSTITCH results package',
+    f'HydroSTITCH results package (version {APP_VERSION})',
     '',
     f'Generated: {datetime.now():%Y-%m-%d %H:%M}',
     f'Model: {cal_model}',
@@ -2630,7 +2685,7 @@ readme_lines = [
     f'  {workbook_name}',
     '      four sheets: GapFilled, BehaviouralModels, EnsembleHydrographs, Metadata',
     '  figures/',
-    '      PNG at 200 dpi of every figure shown in the app',
+    f'      PNG at {FIGURE_DPI} dpi of every figure shown in the app',
     '  csv/',
     '      water year, seasonal and monthly products from the gap filled series',
     '',
@@ -2695,7 +2750,7 @@ col_xlsx.download_button(
     file_name=workbook_name,
     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     key='download_workbook',
-    use_container_width=True,
+    width='stretch',
 )
 
 col_zip.download_button(
@@ -2704,7 +2759,7 @@ col_zip.download_button(
     file_name=f'gr_gapfill_{cal_model.lower()}_{file_tag}.zip',
     mime='application/zip',
     key='download_package',
-    use_container_width=True,
+    width='stretch',
 )
 
 st.caption(f'The zip additionally holds {len(products)} CSV products and {len(FIGURES)} '
