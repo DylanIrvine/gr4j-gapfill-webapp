@@ -67,7 +67,8 @@ and turns off Streamlit's browser usage statistics.
     core/baseflow.py, signatures.py, indices.py, rainfall.py, evaluation.py
                        the analyses
     core/usage.py      the run counter
-    docs/              logo, favicon and model structure diagrams
+    logo/              header logo, browser-tab icon and svg source
+    docs/              model structure diagrams
     tests/             pytest: models against reference values, gap filling,
                        dates, and a headless run of the app
 

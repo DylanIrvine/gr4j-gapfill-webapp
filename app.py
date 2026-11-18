@@ -54,7 +54,7 @@ APP_NAME = 'HydroSTITCH'
 # bump on each release. Also used in the citation, the results workbook and the zip
 APP_VERSION = '1.0'
 APP_URL = 'https://gr4j-gapfill-webapp.streamlit.app/'
-st.set_page_config(page_title=APP_NAME, page_icon='docs/HS_favicon.png')
+st.set_page_config(page_title=APP_NAME, page_icon='logo/HydroSTITCH_icon.png')
 
 # %% interface styling
 # Streamlit's primary button is red in the default theme, and the workflow is a
@@ -795,7 +795,7 @@ with head_text:
     st.caption(f'Version {APP_VERSION}')
 
 with head_logo:
-    st.image('docs/HS_Logo.png', width='stretch')
+    st.image('logo/HydroSTITCH_logo.png', width='stretch')
 
 
 # %% run counter
