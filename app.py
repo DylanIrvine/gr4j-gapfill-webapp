@@ -17,6 +17,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.transforms as mtransforms
+import matplotlib.image as mimage
+from matplotlib.offsetbox import AnnotationBbox, HPacker, OffsetImage, TextArea
+from pathlib import Path
 
 from core.models import (simulate, simhyd_components, MODELS, MODEL_PARAMS,
                          MODEL_INFO, PARAM_NAMES, PARAM_BOUNDS, PARAM_LABELS,
@@ -112,6 +115,7 @@ C_BASE = '#2BA9E0'
 FIGURE_DPI = 300
 CREDIT = 'Produced with HydroSTITCH, Charles Darwin University'
 WATERMARK = 'Dylan Irvine, Charles Darwin University'
+BADGE_ICON = Path(__file__).resolve().parent / 'logo' / 'HydroSTITCH_badge.png'
 LONG_FORCING_GAP = 5
 CACHE_TTL = 3600
 
@@ -218,11 +222,27 @@ def new_fig(w_cm, h_cm, rect):
     return fig, fig.add_axes(rect)
 
 
+BADGE_PT = 14       # height of the app icon in the 'Made using' badge, in points
+
+
+def add_badge(fig, x, y, transform):
+    # 'Made using HydroSTITCH' with the app icon, right-aligned at (x, y). Skipped if the icon is missing
+    try:
+        img = mimage.imread(BADGE_ICON)
+    except (FileNotFoundError, OSError):
+        return
+    packed = HPacker(children=[TextArea('Made using HydroSTITCH', textprops=dict(fontsize=6, color='0.5')),
+                               OffsetImage(img, zoom=BADGE_PT / img.shape[0])],
+                     align='center', pad=0, sep=3)
+    fig.add_artist(AnnotationBbox(packed, (x, y), xycoords=transform, box_alignment=(1, 0.5),
+                                  frameon=False, pad=0, annotation_clip=False))
+
 def add_watermark(fig):
-    # small grey line in its own strip below the figure, bottom left, so it can
-    # be cropped off without touching the plot
-    below = fig.transFigure + mtransforms.ScaledTranslation(0, -5 / 72, fig.dpi_scale_trans)
-    fig.text(0.0, 0.0, WATERMARK, transform=below, ha='left', va='top', fontsize=6, color='0.5')
+    # credit line bottom left and the 'Made using' badge bottom right, in their own strip
+    # below the figure, so both can be cropped off without touching the plot
+    below = fig.transFigure + mtransforms.ScaledTranslation(0, -(BADGE_PT / 2 + 4) / 72, fig.dpi_scale_trans)
+    fig.text(0.0, 0.0, WATERMARK, transform=below, ha='left', va='center', fontsize=6, color='0.5')
+    add_badge(fig, 1.0, 0.0, below)
 
 
 def show(fig, name=None):
